@@ -1,0 +1,497 @@
+{
+  "name": "hicode-ai-integration",
+  "version": "0.1.0",
+  "description": "HiCode AI Model Integration - VSCode Extension",
+  "main": "dist/extension.js",
+  "publisher": "hicode",
+  "displayName": "HiCode AI Assistant",
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hicode-ai-sidebar",
+          "title": "HiCode AI",
+          "icon": "media/hicode-logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "hicode-ai-sidebar": [
+        {
+          "type": "webview",
+          "id": "hicode-ai-chat",
+          "name": "Chat",
+          "icon": "media/icon.svg",
+          "contextualTitle": "HiCode AI Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "hicode.showInlineChat",
+        "title": "HiCode: Show Inline Chat",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickRefactor",
+        "title": "HiCode: Quick Refactor",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickTest",
+        "title": "HiCode: Generate Tests",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickExplain",
+        "title": "HiCode: Explain Code",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickDoc",
+        "title": "HiCode: Generate Documentation",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickFix",
+        "title": "HiCode: Fix Code",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickOptimize",
+        "title": "HiCode: Optimize Code",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.openChat",
+        "title": "HiCode: Open Chat",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.newConversation",
+        "title": "HiCode: New Conversation",
+        "category": "HiCode",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "hicode.showHistory",
+        "title": "HiCode: Show Conversation History",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.switchModel",
+        "title": "HiCode: Switch AI Model",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.configureModels",
+        "title": "HiCode: Configure AI Models",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.openSettings",
+        "title": "HiCode: Open Settings",
+        "category": "HiCode",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "hicode.triggerCompletion",
+        "title": "HiCode: Trigger AI Completion",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.undoAgentAction",
+        "title": "HiCode: Undo Last Agent Action",
+        "category": "HiCode"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "hicode.showInlineChat",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "hicode.quickRefactor",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.quickTest",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.quickExplain",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.quickDoc",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.quickFix",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.quickOptimize",
+        "key": "ctrl+shift+o",
+        "mac": "cmd+shift+o",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "hicode.openChat",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h"
+      },
+      {
+        "command": "hicode.triggerCompletion",
+        "key": "ctrl+space",
+        "mac": "cmd+space",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "hicode.undoAgentAction",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z"
+      }
+    ],
+      "menus": {
+      "view/title": [
+        {
+          "command": "hicode.newConversation",
+          "when": "view == hicode-ai-chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "hicode.openSettings",
+          "when": "view == hicode-ai-chat",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "hicode.showInlineChat",
+          "group": "hicode@1",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "hicode.quickRefactor",
+          "group": "hicode@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickTest",
+          "group": "hicode@3",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickExplain",
+          "group": "hicode@4",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickDoc",
+          "group": "hicode@5",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickFix",
+          "group": "hicode@6",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickOptimize",
+          "group": "hicode@7",
+          "when": "editorHasSelection"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "hicode.quickRefactor",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickTest",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickExplain",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickDoc",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickFix",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "hicode.quickOptimize",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "HiCode AI Assistant",
+      "properties": {
+        "hicode.enableInlineChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline chat functionality"
+        },
+        "hicode.enableCodeCompletion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered code completion"
+        },
+        "hicode.enableAgent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Agent system for automated tasks"
+        },
+        "hicode.modelConfigs": {
+          "type": "array",
+          "default": [],
+          "description": "AI model configurations",
+          "items": {
+            "type": "object",
+            "properties": {
+              "modelId": {
+                "type": "string",
+                "description": "Unique identifier for the model"
+              },
+              "modelName": {
+                "type": "string",
+                "description": "Model name (e.g., deepseek-chat, gpt-4)"
+              },
+              "displayName": {
+                "type": "string",
+                "description": "Display name shown in UI"
+              },
+              "vendor": {
+                "type": "string",
+                "enum": [
+                  "deepseek",
+                  "openai",
+                  "zhipuai",
+                  "custom"
+                ],
+                "description": "Model vendor"
+              },
+              "apiBaseUrl": {
+                "type": "string",
+                "description": "API base URL"
+              },
+              "maxContextTokens": {
+                "type": "number",
+                "description": "Maximum context tokens"
+              },
+              "supportMultimodal": {
+                "type": "boolean",
+                "description": "Whether the model supports multimodal input"
+              }
+            }
+          }
+        },
+        "hicode.currentModel": {
+          "type": "string",
+          "default": "",
+          "description": "Currently selected AI model ID"
+        },
+        "hicode.chatMode": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "agent"
+          ],
+          "enumDescriptions": [
+            "Chat mode: Standard conversational AI assistant",
+            "Agent mode: AI agent with task execution capabilities"
+          ],
+          "default": "chat",
+          "description": "Current conversation mode: 'chat' for standard chat or 'agent' for agent mode"
+        },
+        "hicode.completionDelay": {
+          "type": "number",
+          "default": 300,
+          "description": "Delay in milliseconds before triggering completion (debounce)"
+        },
+        "hicode.completionMaxTokens": {
+          "type": "number",
+          "default": 500,
+          "description": "Maximum tokens for completion suggestions"
+        },
+        "hicode.contextMaxTokens": {
+          "type": "number",
+          "default": 4000,
+          "description": "Maximum tokens for code context"
+        },
+        "hicode.enableContextCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable context caching for better performance"
+        },
+        "hicode.logLevel": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "Logging level"
+        },
+        "hicode.enableDebugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug mode with detailed logging"
+        },
+        "hicode.requestTimeout": {
+          "type": "number",
+          "default": 30000,
+          "description": "API request timeout in milliseconds"
+        },
+        "hicode.maxRetries": {
+          "type": "number",
+          "default": 3,
+          "description": "Maximum number of retries for failed API requests"
+        },
+        "hicode.enableLocalMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable local mode for self-hosted models"
+        },
+        "hicode.requireAuthorization": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user authorization before sending code to AI"
+        },
+        "hicode.autoSaveHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save conversation history"
+        },
+        "hicode.maxHistorySessions": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum number of conversation sessions to keep"
+        },
+        "hicode.inlineChatShortcuts": {
+          "type": "object",
+          "default": {
+            "/refactor": "Refactor selected code",
+            "/test": "Generate tests for selected code",
+            "/explain": "Explain selected code",
+            "/doc": "Generate documentation",
+            "/fix": "Fix code issues",
+            "/optimize": "Optimize code performance"
+          },
+          "description": "Inline chat quick command shortcuts"
+        },
+        "hicode.userPrompt": {
+          "type": "array",
+          "default": [],
+          "description": "User-defined prompt templates",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the prompt"
+              },
+              "title": {
+                "type": "string",
+                "description": "Prompt title"
+              },
+              "content": {
+                "type": "string",
+                "description": "Prompt content/template"
+              },
+              "category": {
+                "type": "string",
+                "description": "Prompt category"
+              }
+            }
+          }
+        },
+        "hicode.specifications": {
+          "type": "array",
+          "default": [],
+          "description": "Product-level specifications and requirements",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the specification"
+              },
+              "title": {
+                "type": "string",
+                "description": "Specification title"
+              },
+              "content": {
+                "type": "string",
+                "description": "Specification content"
+              },
+              "category": {
+                "type": "string",
+                "description": "Specification category"
+              },
+              "priority": {
+                "type": "string",
+                "description": "Specification priority"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.6",
+    "@types/uuid": "^9.0.7",
+    "@types/vscode": "^1.85.0",
+    "iconv-lite": "^0.7.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "axios": "^1.6.5",
+    "eventsource": "^2.0.2",
+    "fast-check": "^3.15.0",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  }
+}
