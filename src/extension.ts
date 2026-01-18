@@ -13,6 +13,7 @@ import { PerformanceTimer, createLazyModule, LazyModule } from './utils/performa
 import { commandManager } from './commands';
 import { ChatWebviewProvider } from './providers/chatWebviewProvider';
 import * as MessageType from './utils/messageType';
+import { registerDiffPreviewCommands } from './utils/codeDiffPreview';
 
 /** 扩展版本号 */
 export const version = '0.1.0';
@@ -128,6 +129,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // 监听编辑器选择变化，发送代码选择事件到前端
     registerSelectionChangeListener(context);
     timer.mark('selection-listener-registered');
+
+    // ========== 第四阶段（续）：注册代码差异预览命令 ==========
+    // 注册代码差异预览的确认/撤销命令
+    registerDiffPreviewCommands(context);
+    timer.mark('diff-preview-commands-registered');
 
     // ========== 第五阶段：加载配置 ==========
     // 加载最小必要配置，其他配置在需要时再加载

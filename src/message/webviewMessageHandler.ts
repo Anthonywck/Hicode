@@ -1504,6 +1504,64 @@ export async function handleClearSelection(
 }
 
 /**
+ * 处理插入代码请求
+ * 
+ * 在当前打开编辑器的光标位置插入代码内容
+ * 如果光标选中内容，直接替换选中内容
+ * 
+ * @param message 消息对象，包含 content（代码内容）和 chatId
+ * @param webview Webview 实例
+ */
+export async function handleInsertCode(
+  message: any,
+  webview: vscode.Webview
+): Promise<void> {
+  logger.info('收到插入代码请求', { message }, 'WebviewMessageHandler');
+
+  try {
+    const { token, data } = message;
+    const content = data?.content.trim();
+    const { chatId } = data || {};
+
+    // 验证代码内容
+    if (!content || typeof content !== 'string') {
+      logger.warn('无效的代码内容', { data }, 'WebviewMessageHandler');
+      webview.postMessage({
+        token: token || generateUUID(),
+        message: MessageType.HICODE_ERROR_B2F,
+        data: {
+          error: '代码内容不能为空',
+          chatId
+        }
+      });
+      return;
+    }
+
+    // 获取当前活动的编辑器
+    const editor = vscode.window.activeTextEditor;
+    
+    if (!editor) {
+      logger.warn('没有活动的编辑器，无法插入代码', {}, 'WebviewMessageHandler');
+      vscode.window.showWarningMessage('请先打开一个编辑器文件');
+      return;
+    }
+
+    // 获取当前选择范围
+    const selection = editor.selection;
+    const originalRange = new vscode.Range(selection.start, selection.end);
+
+    // 使用代码差异预览功能
+    const { codeDiffPreview } = await import('../utils/codeDiffPreview');
+    await codeDiffPreview.showDiffPreview(editor, originalRange, content);
+
+    logger.debug('代码差异预览已显示，等待用户确认', { chatId }, 'WebviewMessageHandler');
+  } catch (error) {
+    logger.error('插入代码失败', error, 'WebviewMessageHandler');
+    vscode.window.showErrorMessage(`插入代码失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * 处理删除产品级规范请求
  * @param message 消息对象
  * @param webview Webview 实例

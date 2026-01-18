@@ -32,7 +32,8 @@ import {
   handleAddSpecification,
   handleEditSpecification,
   handleDeleteSpecification,
-  handleClearSelection
+  handleClearSelection,
+  handleInsertCode
 } from './webviewMessageHandler';
 
 /**
@@ -183,6 +184,14 @@ export function routeWebviewMessage(
         // 兼容旧的 clearSelected 命令
         handleClearSelection(message, webview).catch(error => {
           logger.error('处理清除代码选择失败', error, 'WebviewMessageRouter');
+        });
+        break;
+
+      // ========== 代码操作相关消息 ==========
+      case MessageType.HICODE_INSERT_CODE_F2B_REQ:
+        logger.info('路由到插入代码处理器', { messageType, message }, 'WebviewMessageRouter');
+        handleInsertCode(message, webview).catch(error => {
+          logger.error('处理插入代码失败', error, 'WebviewMessageRouter');
         });
         break;
 

@@ -123,3 +123,7 @@ export const HICODE_SELECTION_CHANGE = 'hicode_selection_change';
 /** 前端请求：清除代码选择（前端到插件端） */
 export const HICODE_CLEAR_SELECTION = 'hicode_clear_selection';
 
+// ========== 代码操作相关消息 ==========
+
+/** 前端请求：插入代码到编辑器（前端到插件端） */
+export const HICODE_INSERT_CODE_F2B_REQ = 'hicode_insert_code_f2b_req';

@@ -186,20 +186,36 @@ export class SettingsWebviewProvider {
     panel: vscode.WebviewPanel,
     html: string
   ): string {
+    const mediaPath = vscode.Uri.joinPath(
+      vscode.Uri.file(context.extensionPath),
+      'media',
+      'settings'
+    );
+    const assetsPath = vscode.Uri.joinPath(mediaPath, 'assets');
+    const assetsUri = panel.webview.asWebviewUri(assetsPath).toString();
+    const mediaUri = panel.webview.asWebviewUri(mediaPath).toString();
+
     // 辅助函数：将相对路径转换为 Webview URI
     const fixResource = (orig: string): string => {
       // 跳过已经是完整 URL 或 data URI 的路径
-      if (orig.startsWith('http') || orig.startsWith('data:')) {
+      if (orig.startsWith('http') || orig.startsWith('data:') || orig.startsWith('vscode-webview:')) {
         return orig;
       }
 
-      // 构建完整的资源文件路径
-      const resourcePath = vscode.Uri.file(
-        path.join(context.extensionPath, 'media', 'settings', orig)
-      );
+      // 处理 /assets/ 路径
+      if (orig.startsWith('/assets/')) {
+        const fileName = orig.replace('/assets/', '');
+        return `${assetsUri}/${fileName}`;
+      }
 
-      // 转换为 Webview URI
-      return panel.webview.asWebviewUri(resourcePath).toString();
+      // 处理 /favicon.ico 等根路径资源
+      if (orig.startsWith('/') && !orig.startsWith('//')) {
+        const fileName = orig.substring(1);
+        return `${mediaUri}/${fileName}`;
+      }
+
+      // 其他相对路径
+      return `${mediaUri}/${orig}`;
     };
 
     // 处理 src 和 href 属性
@@ -207,6 +223,10 @@ export class SettingsWebviewProvider {
     html = html.replace(
       /(src|href)="(?!http|data:)([^"]+)"/g,
       (match, attr, val) => `${attr}="${fixResource(val)}"`
+    );
+    html = html.replace(
+      /(src|href)='(?!http|data:)([^']+)'/g,
+      (match, attr, val) => `${attr}='${fixResource(val)}'`
     );
 
     // 处理 CSS 中的 url() 函数
@@ -219,6 +239,9 @@ export class SettingsWebviewProvider {
       // 转换为 Webview URI
       return `url('${fixResource(val)}')`;
     });
+
+    // 移除开发模式的脚本标签（包含 /src/ 路径的）
+    html = html.replace(/<script[^>]*src=["'][^"']*\/src\/[^"']*["'][^>]*><\/script>/gi, '');
 
     return html;
   }

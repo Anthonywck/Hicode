@@ -19,7 +19,7 @@
         {
           "id": "hicode-ai-sidebar",
           "title": "HiCode AI",
-          "icon": "media/hicode-logo.svg"
+          "icon": "hicode-logo.svg"
         }
       ]
     },
@@ -111,6 +111,16 @@
         "command": "hicode.undoAgentAction",
         "title": "HiCode: Undo Last Agent Action",
         "category": "HiCode"
+      },
+      {
+        "command": "hicode.confirmCodeChange",
+        "title": "HiCode: Confirm Code Change",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.cancelCodeChange",
+        "title": "HiCode: Cancel Code Change",
+        "category": "HiCode"
       }
     ],
     "keybindings": [
@@ -171,6 +181,18 @@
         "command": "hicode.undoAgentAction",
         "key": "ctrl+shift+z",
         "mac": "cmd+shift+z"
+      },
+      {
+        "command": "hicode.confirmCodeChange",
+        "key": "ctrl+shift+y",
+        "mac": "cmd+shift+y",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "hicode.cancelCodeChange",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n",
+        "when": "editorTextFocus"
       }
     ],
       "menus": {

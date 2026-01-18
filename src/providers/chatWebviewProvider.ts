@@ -69,6 +69,21 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       []
     );
 
+    // 监听 webview 可见性变化
+    // 当 webview 首次变为可见时，确保 HTML 内容已正确设置
+    // 这可以解决首次加载时页面空白的问题
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        // 当 webview 变为可见时，确保 HTML 内容已设置
+        // 如果 HTML 为空或只包含错误页面，重新设置
+        const currentHtml = webviewView.webview.html || '';
+        if (!currentHtml || currentHtml.includes('无法加载聊天界面')) {
+          logger.debug('Webview 变为可见，设置 HTML 内容', {}, 'ChatWebviewProvider');
+          webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+        }
+      }
+    });
+
     // 发送初始数据到 Webview（延迟发送，等待 Webview 准备就绪）
     // 初始数据将在 Webview 发送 ready 消息后通过 handleWebviewReady 发送
 
@@ -103,6 +118,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       let html = fs.readFileSync(chatPagePath, 'utf8');
       logger.debug('HTML 文件加载成功', { length: html.length }, 'ChatWebviewProvider');
 
+      // 插入 CSP meta 标签（必需，否则资源无法加载）
+      // 注意：font-src 需要包含 data: 以支持内联的 iconfont 字体文件
+      const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src 'unsafe-eval' 'unsafe-inline' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; font-src ${webview.cspSource} data:;">`;
+      html = html.replace(/<head(.*?)>/i, `<head$1>\n    ${cspMeta}`);
+
       // 转换资源路径为 Webview URI
       html = this._convertPathsToWebviewUris(html, webview);
       logger.debug('资源路径转换完成', {}, 'ChatWebviewProvider');
@@ -116,7 +136,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   /**
    * 转换 HTML 中的资源路径为 Webview URI
-   * 处理 Vue 编译后的绝对路径（/js/..., /css/...）
+   * 处理 Vue 编译后的绝对路径（/assets/..., /js/..., /css/...）
    * 
    * @param html 原始 HTML 内容
    * @param webview Webview 实例
@@ -124,22 +144,70 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
    */
   private _convertPathsToWebviewUris(html: string, webview: vscode.Webview): string {
     const mediaPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'chatPage');
+    const mediaUri = webview.asWebviewUri(mediaPath).toString();
 
-    // 获取 js 和 css 目录的 Webview URI
-    const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'js')).toString();
-    const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'css')).toString();
+    logger.debug('资源 URI', { mediaUri }, 'ChatWebviewProvider');
 
-    logger.debug('资源 URI', { jsUri, cssUri }, 'ChatWebviewProvider');
+    // 辅助函数：将相对路径转换为 Webview URI
+    const fixResource = (orig: string): string => {
+      // 跳过已经是完整 URL 或 data URI 的路径
+      if (orig.startsWith('http') || orig.startsWith('data:') || orig.startsWith('vscode-webview:')) {
+        return orig;
+      }
 
-    // 替换 /js/ 路径
-    // 例如：src="/js/app.js" -> src="vscode-webview://xxx/js/app.js"
-    html = html.replace(/src="\/js\//g, `src="${jsUri}/`);
-    html = html.replace(/src='\/js\//g, `src='${jsUri}/`);
+      // 处理 /assets/ 路径（Vue 3 + Vite 编译后的资源路径）
+      if (orig.startsWith('/assets/')) {
+        const fileName = orig.replace('/assets/', '');
+        return `${mediaUri}/assets/${fileName}`;
+      }
 
-    // 替换 /css/ 路径
-    // 例如：href="/css/app.css" -> href="vscode-webview://xxx/css/app.css"
-    html = html.replace(/href="\/css\//g, `href="${cssUri}/`);
-    html = html.replace(/href='\/css\//g, `href='${cssUri}/`);
+      // 处理 /js/ 路径（兼容旧格式）
+      if (orig.startsWith('/js/')) {
+        const fileName = orig.replace('/js/', '');
+        return `${mediaUri}/js/${fileName}`;
+      }
+
+      // 处理 /css/ 路径（兼容旧格式）
+      if (orig.startsWith('/css/')) {
+        const fileName = orig.replace('/css/', '');
+        return `${mediaUri}/css/${fileName}`;
+      }
+
+      // 处理 /favicon.ico 等根路径资源
+      if (orig.startsWith('/') && !orig.startsWith('//')) {
+        const fileName = orig.substring(1);
+        return `${mediaUri}/${fileName}`;
+      }
+
+      // 其他相对路径
+      return `${mediaUri}/${orig}`;
+    };
+
+    // 处理 src 属性中的路径
+    html = html.replace(/(src)="([^"]+)"/g, (match, attr, val) => {
+      return `${attr}="${fixResource(val)}"`;
+    });
+    html = html.replace(/(src)='([^']+)'/g, (match, attr, val) => {
+      return `${attr}='${fixResource(val)}'`;
+    });
+
+    // 处理 href 属性中的路径
+    html = html.replace(/(href)="([^"]+)"/g, (match, attr, val) => {
+      return `${attr}="${fixResource(val)}"`;
+    });
+    html = html.replace(/(href)='([^']+)'/g, (match, attr, val) => {
+      return `${attr}='${fixResource(val)}'`;
+    });
+
+    // 处理 CSS 中的 url() 函数
+    html = html.replace(/url\((['"]?)([^'"\)]+)\1\)/g, (match, quote, val) => {
+      // 跳过已经是完整 URL 的路径
+      if (val.startsWith('http') || val.startsWith('data:')) {
+        return match;
+      }
+      // 转换为 Webview URI
+      return `url('${fixResource(val)}')`;
+    });
 
     return html;
   }
