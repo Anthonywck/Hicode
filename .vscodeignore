@@ -3,11 +3,12 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-lock.yaml
+package-lock.json
 
-# Build output
-dist/
-out/
-*.vsix
+# Build output (keep dist/ for extension, but ignore source maps in production)
+*.map
+!media/**/*.map
 
 # Test files and coverage
 coverage/
@@ -54,8 +55,7 @@ logs/
 
 # TypeScript
 *.tsbuildinfo
-*.d.ts.map
-*.js.map
+src/
 
 # Temporary files
 *.tmp
@@ -69,14 +69,28 @@ logs/
 .vscode-test-results/
 *.code-workspace
 
-# Media build artifacts (if generated)
-media/**/*.js
-media/**/*.map
-!media/**/*.min.js
-
 # Fix scripts (temporary)
 fix-encoding*.js
 fix-encoding*.py
 
-# packege lock file
-# package-lock.json
+# Documentation (optional - include if you want docs in the package)
+# docs/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Other
+*.vsix
+.eslintrc*
+.prettierrc*
+.prettierignore
+jest.config.js
+tsconfig.json
