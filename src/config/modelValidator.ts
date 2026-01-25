@@ -163,6 +163,12 @@ export class ModelValidator {
       }
     }
 
+    if (update.temperature !== undefined) {
+      if (typeof update.temperature !== 'number' || update.temperature < 0 || update.temperature > 2) {
+        errors.push('Temperature must be a number between 0 and 2');
+      }
+    }
+
     if (update.supportMultimodal !== undefined) {
       if (typeof update.supportMultimodal !== 'boolean') {
         errors.push('Support multimodal must be a boolean');

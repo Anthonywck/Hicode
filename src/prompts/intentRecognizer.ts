@@ -170,7 +170,7 @@ Response:`;
     if (message.context) {
       context.file_path_name = message.context.currentFile?.path || '';
       context.lang = message.context.currentFile?.language || '';
-      context.select_code_info = message.context.selection?.text || '';
+      context.select_code_info = message.context.selection?.content || '';
     }
     
     return context;

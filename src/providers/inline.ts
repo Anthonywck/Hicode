@@ -507,7 +507,7 @@ export class InlineChatProvider implements IInlineChatProvider {
         },
         {
           role: 'user',
-          content: `${input}\n\n代码：\n${context.selection?.text || context.currentFile.content}`
+          content: `${input}\n\n代码：\n${context.selection?.content || context.currentFile.content}`
         }
       ],
       model: 'default',
@@ -548,7 +548,7 @@ export class InlineChatProvider implements IInlineChatProvider {
 
     if (match && context.selection) {
       return {
-        originalCode: context.selection.text,
+        originalCode: context.selection.content,
         suggestedCode: match[1],
         explanation: content.replace(codeBlockRegex, '').trim(),
         range: {

@@ -205,6 +205,25 @@ export class ConfigManager implements IConfigManager {
   }
 
   /**
+   * 获取 Agent 模式
+   * @returns 'chat' | 'agent'，默认为 'chat'
+   */
+  getAgentMode(): 'chat' | 'agent' {
+    return this.get<'chat' | 'agent'>('agentMode', 'chat')!;
+  }
+
+  /**
+   * 设置 Agent 模式
+   * @param mode Agent 模式：'chat' 或 'agent'
+   */
+  async setAgentMode(mode: 'chat' | 'agent'): Promise<void> {
+    if (mode !== 'chat' && mode !== 'agent') {
+      throw new Error('Agent mode must be either "chat" or "agent"');
+    }
+    await this.set('agentMode', mode);
+  }
+
+  /**
    * 获取所有配置（用于导出）
    */
   getAllConfigs(): Record<string, any> {
@@ -216,6 +235,7 @@ export class ConfigManager implements IConfigManager {
       autoSaveInterval: this.getAutoSaveInterval(),
       maxHistorySize: this.getMaxHistorySize(),
       chatMode: this.getChatMode(),
+      agentMode: this.getAgentMode(),
       // 模型配置不包含在这里，需要单独导出
     };
   }
@@ -230,5 +250,6 @@ export class ConfigManager implements IConfigManager {
     await this.setAutoSaveInterval(30000);
     await this.setMaxHistorySize(100);
     await this.setChatMode('chat');
+    await this.setAgentMode('chat');
   }
 }

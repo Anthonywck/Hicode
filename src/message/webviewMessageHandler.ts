@@ -212,10 +212,12 @@ export async function handleGetModels(
     const modelsWithKeys = await Promise.all(
       models.map(async (model: any) => {
         const apiKey = await configManager.models.getApiKey(model.modelId);
-        return {
+        const modelWithKey = {
           ...model,
           apiKey: apiKey || ''
         };
+        // 将token单位转换为K单位显示给前端
+        return processModelDataForDisplay(modelWithKey);
       })
     );
     
@@ -397,6 +399,71 @@ export async function handleChangeModel(
  * @param message 消息对象
  * @param webview Webview 实例
  */
+/**
+ * 辅助函数：将K单位转换为token单位（用于存储）
+ */
+function kToToken(k: number | undefined): number | undefined {
+  if (k === undefined || k === null) return undefined;
+  return Math.round(k * 1024);
+}
+
+/**
+ * 辅助函数：将token单位转换为K单位（用于显示）
+ */
+function tokenToK(tokens: number | undefined): number | undefined {
+  if (tokens === undefined || tokens === null) return undefined;
+  return Math.round((tokens / 1024) * 100) / 100; // 保留2位小数
+}
+
+/**
+ * 辅助函数：处理前端传来的模型数据，转换为后端存储格式
+ * - 将K单位的 maxContextTokens 转换为token单位
+ * - maxOutputTokens 不开放给用户配置，自动设置为默认值 2K (2048 tokens)
+ * - 确保 temperature 有默认值 0.6
+ */
+function processModelDataForStorage(data: any): any {
+  const processed = { ...data };
+  
+  // 将K单位转换为token单位
+  if (processed.maxContextTokens !== undefined && processed.maxContextTokens !== null) {
+    // 如果值小于1000，可能是K单位，需要转换；否则已经是token单位
+    if (processed.maxContextTokens < 1000) {
+      processed.maxContextTokens = kToToken(processed.maxContextTokens) || 4096;
+    }
+  } else {
+    // 如果没有提供，设置默认值 4K = 4096 tokens
+    processed.maxContextTokens = 4096;
+  }
+  
+  // maxOutputTokens 不开放给用户配置，始终设置为默认值 2K (2048 tokens)
+  processed.maxOutputTokens = 2048;
+  
+  // 确保 temperature 有默认值 0.6
+  if (processed.temperature === undefined || processed.temperature === null) {
+    processed.temperature = 0.6;
+  }
+  
+  return processed;
+}
+
+/**
+ * 辅助函数：处理模型数据，将token单位转换为K单位（用于返回给前端）
+ */
+function processModelDataForDisplay(model: any): any {
+  const processed = { ...model };
+  
+  // 将token单位转换为K单位
+  if (processed.maxContextTokens !== undefined && processed.maxContextTokens !== null) {
+    processed.maxContextTokens = tokenToK(processed.maxContextTokens) || 4;
+  }
+  
+  // maxOutputTokens 不开放给用户配置，不在返回数据中显示
+  
+  // temperature 保持不变，直接返回
+  
+  return processed;
+}
+
 export async function handleAddModel(
   message: any,
   webview: vscode.Webview
@@ -420,8 +487,11 @@ export async function handleAddModel(
       throw new Error(`模型ID ${data.modelId} 已存在`);
     }
 
+    // 处理数据：将K单位转换为token单位，设置temperature默认值
+    const processedData = processModelDataForStorage(data);
+
     // 添加模型配置
-    await configManager.models.addModelConfig(data);
+    await configManager.models.addModelConfig(processedData);
 
     // 获取更新后的模型列表
     const models = configManager.models.getModelConfigs();
@@ -430,10 +500,12 @@ export async function handleAddModel(
     const modelsWithKeys = await Promise.all(
       models.map(async (model: any) => {
         const apiKey = await configManager.models.getApiKey(model.modelId);
-        return {
+        const modelWithKey = {
           ...model,
           apiKey: apiKey || ''
         };
+        // 将token单位转换为K单位显示给前端
+        return processModelDataForDisplay(modelWithKey);
       })
     );
 
@@ -548,8 +620,11 @@ export async function handleEditModel(
       throw new Error(`模型 ${data.modelId} 不存在`);
     }
 
+    // 处理数据：将K单位转换为token单位，设置temperature默认值
+    const processedData = processModelDataForStorage(data);
+
     // 更新模型配置
-    await configManager.models.updateModelConfig(data.modelId, data);
+    await configManager.models.updateModelConfig(data.modelId, processedData);
 
     // 获取更新后的模型列表
     const models = configManager.models.getModelConfigs();
@@ -611,10 +686,12 @@ export async function handleEditModel(
       const modelsWithKeys = await Promise.all(
         models.map(async (model: any) => {
           const apiKey = await configManager.models.getApiKey(model.modelId);
-          return {
+          const modelWithKey = {
             ...model,
             apiKey: apiKey || ''
           };
+          // 将token单位转换为K单位显示给前端
+          return processModelDataForDisplay(modelWithKey);
         })
       );
       
@@ -733,10 +810,12 @@ export async function handleDeleteModel(
       const modelsWithKeys = await Promise.all(
         models.map(async (model: any) => {
           const apiKey = await configManager.models.getApiKey(model.modelId);
-          return {
+          const modelWithKey = {
             ...model,
             apiKey: apiKey || ''
           };
+          // 将token单位转换为K单位显示给前端
+          return processModelDataForDisplay(modelWithKey);
         })
       );
       
@@ -792,10 +871,12 @@ export async function handleGetSettings(
     const modelsWithKeys = await Promise.all(
       models.map(async (model: any) => {
         const apiKey = await configManager.models.getApiKey(model.modelId);
-        return {
+        const modelWithKey = {
           ...model,
           apiKey: apiKey || ''
         };
+        // 将token单位转换为K单位显示给前端
+        return processModelDataForDisplay(modelWithKey);
       })
     );
     
@@ -807,6 +888,9 @@ export async function handleGetSettings(
 
     // 获取当前聊天模式
     const chatMode = configManager.getChatMode();
+
+    // 获取当前 Agent 模式
+    const agentMode = configManager.getAgentMode();
 
     // 获取当前使用的模型（modelId格式）
     const apiClient = await getAPIClient();
@@ -837,7 +921,8 @@ export async function handleGetSettings(
         userPrompt: userPrompts, // 兼容旧字段名
         specifications,
         chatMode: chatMode, // 当前聊天模式
-        mode: chatMode // 兼容字段
+        mode: chatMode, // 兼容字段
+        agentMode: agentMode, // 当前 Agent 模式
       }
     });
 
@@ -950,6 +1035,106 @@ export async function handleChangeMode(
       token: message.token || generateUUID(),
       message: MessageType.HICODE_ERROR_B2F,
       data: {
+        operationType: '切换聊天模式',
+        operation: 'changeMode',
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+}
+
+/**
+ * 处理切换 Agent 模式请求
+ * @param message 消息对象
+ * @param webview Webview 实例
+ */
+export async function handleChangeAgentMode(
+  message: any,
+  webview: vscode.Webview
+): Promise<void> {
+  logger.debug('收到切换 Agent 模式请求', { message }, 'WebviewMessageHandler');
+
+  try {
+    const { data } = message;
+    
+    // 获取模式（前端传递的格式）
+    const mode = data?.mode || data?.agentMode;
+    
+    if (!mode) {
+      throw new Error('Agent 模式不能为空');
+    }
+
+    // 验证模式值
+    if (mode !== 'chat' && mode !== 'agent') {
+      throw new Error('Agent 模式必须是 "chat" 或 "agent"');
+    }
+
+    // 获取配置管理器
+    const configManager = await getConfigManager();
+
+    // 设置 Agent 模式
+    await configManager.setAgentMode(mode);
+
+    // 获取更新后的当前模式
+    const currentMode = configManager.getAgentMode();
+    
+    // 发送响应到请求的webview
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_CHANGE_AGENT_MODE_B2F_RES,
+      data: {
+        mode: currentMode,
+        agentMode: currentMode, // 兼容字段
+        success: true
+      }
+    });
+
+    // 通知chat页面更新模式（如果chat页面已打开）
+    const chatProvider = getChatWebviewProvider();
+    if (chatProvider) {
+      try {
+        chatProvider.postMessage({
+          token: generateUUID(),
+          message: MessageType.HICODE_CHANGE_AGENT_MODE_B2F_RES,
+          data: {
+            mode: currentMode,
+            agentMode: currentMode,
+            success: true
+          }
+        });
+        logger.debug('已通知chat页面更新 Agent 模式', { mode: currentMode }, 'WebviewMessageHandler');
+      } catch (error) {
+        // chat页面通知失败不影响主流程，只记录日志
+        logger.warn('通知chat页面更新 Agent 模式失败', error, 'WebviewMessageHandler');
+      }
+    }
+
+    // 通知settings页面更新模式（如果settings页面已打开）
+    try {
+      SettingsWebviewProvider.sendMessage({
+        token: generateUUID(),
+        message: MessageType.HICODE_CHANGE_AGENT_MODE_B2F_RES,
+        data: {
+          mode: currentMode,
+          agentMode: currentMode,
+          success: true
+        }
+      });
+      logger.debug('已通知settings页面更新 Agent 模式', { mode: currentMode }, 'WebviewMessageHandler');
+    } catch (error) {
+      // settings页面通知失败不影响主流程，只记录日志
+      logger.warn('通知settings页面更新 Agent 模式失败', error, 'WebviewMessageHandler');
+    }
+
+    logger.info('切换 Agent 模式成功', { mode: currentMode }, 'WebviewMessageHandler');
+  } catch (error) {
+    logger.error('切换 Agent 模式失败', error, 'WebviewMessageHandler');
+    
+    // 发送错误响应
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_ERROR_B2F,
+      data: {
         error: error instanceof Error ? error.message : String(error),
         mode: message.data?.mode
       }
@@ -1018,10 +1203,12 @@ export async function handleWebviewReady(
     const modelsWithKeys = await Promise.all(
       models.map(async (model: any) => {
         const apiKey = await configManager.models.getApiKey(model.modelId);
-        return {
+        const modelWithKey = {
           ...model,
           apiKey: apiKey || ''
         };
+        // 将token单位转换为K单位显示给前端
+        return processModelDataForDisplay(modelWithKey);
       })
     );
     
@@ -1030,7 +1217,13 @@ export async function handleWebviewReady(
     
     // 获取产品级规范列表
     const specifications = configManager.specifications.getSpecificationConfigs();
-    
+
+    // 获取当前聊天模式
+    const chatMode = configManager.getChatMode();
+
+    // 获取当前 Agent 模式
+    const agentMode = configManager.getAgentMode();
+
     // 获取当前使用的模型（modelId格式）
     const currentModelId = apiClient.getCurrentModel();
     
@@ -1056,6 +1249,9 @@ export async function handleWebviewReady(
         prompts: userPrompts,
         userPrompt: userPrompts, // 兼容旧字段名
         specifications,
+        chatMode: chatMode, // 当前聊天模式
+        mode: chatMode, // 兼容字段
+        agentMode: agentMode, // 当前 Agent 模式
         timestamp: new Date().toISOString()
       }
     });

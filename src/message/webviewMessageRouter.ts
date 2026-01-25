@@ -19,6 +19,7 @@ import {
   handleGetModels,
   handleChangeModel,
   handleChangeMode,
+  handleChangeAgentMode,
   handleAddModel,
   handleEditModel,
   handleDeleteModel,
@@ -106,6 +107,12 @@ export function routeWebviewMessage(
       case MessageType.HICODE_CHANGE_MODE_F2B_REQ:
         handleChangeMode(message, webview).catch(error => {
           logger.error('处理切换聊天模式失败', error, 'WebviewMessageRouter');
+        });
+        break;
+
+      case MessageType.HICODE_CHANGE_AGENT_MODE_F2B_REQ:
+        handleChangeAgentMode(message, webview).catch(error => {
+          logger.error('处理切换 Agent 模式失败', error, 'WebviewMessageRouter');
         });
         break;
 

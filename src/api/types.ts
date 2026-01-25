@@ -3,6 +3,8 @@
  * 定义了与AI模型交互的核心数据结构和接口
  */
 
+import * as vscode from 'vscode';
+
 /**
  * 模型配置
  * 包含模型的基本信息和API连接配置
@@ -18,8 +20,10 @@ export interface ModelConfig {
   vendor: 'deepseek' | 'openai' | 'zhipuai' | 'custom';
   /** 模型描述 */
   modelDescription?: string;
-  /** 最大上下文token数 */
+  /** 最大上下文token数（存储为token单位） */
   maxContextTokens: number;
+  /** 温度参数（默认0.6，不开放给用户配置） */
+  temperature?: number;
   /** 是否支持多模态 */
   supportMultimodal: boolean;
   /** API密钥（存储在SecretStorage） */
@@ -41,9 +45,11 @@ export interface CodeContext {
   };
   /** 选中的代码 */
   selection?: {
-    text: string;
+    content: string;
     startLine: number;
     endLine: number;
+    path: string;
+    language: string;
   };
   /** 光标位置上下文 */
   cursorContext?: {
@@ -51,12 +57,32 @@ export interface CodeContext {
     column: number;
     beforeCursor: string;
     afterCursor: string;
+    language: string;
+    path: string;
   };
   /** 相关文件 */
   relatedFiles?: Array<{
     path: string;
     relevance: number;
     excerpt: string;
+    /** 文件语言ID */
+    language?: string;
+    /** 符号名称 */
+    name?: string;
+    /** 起始行号（从0开始） */
+    startLine?: number;
+    /** 结束行号（从0开始） */
+    endLine?: number;
+    /** 符号内容 */
+    content?: string;
+    /** 上下文内容（前后各5行） */
+    context?: string;
+    /** 文件URI */
+    uri?: string;
+    /** 符号类型 */
+    kind?: vscode.SymbolKind;
+    /** 父符号名称（如果该符号是类的方法或属性） */
+    parentName?: string;
   }>;
   /** 项目信息 */
   projectInfo?: {
@@ -229,4 +255,29 @@ export interface ModelAdapter {
    * @returns token数量
    */
   countTokens(text: string): number;
+}
+
+/**
+ * 依赖符号信息
+ * 表示选中代码中使用的符号及其定义
+ */
+export interface DependencySymbol {
+  /** 符号名称 */
+  name: string;
+  /** 定义文件路径 */
+  filePath: string;
+  /** 起始行号（从0开始） */
+  startLine: number;
+  /** 结束行号（从0开始） */
+  endLine: number;
+  /** 符号内容 */
+  content: string;
+  /** 上下文内容（前后各5行） */
+  context: string;
+  /** 文件URI */
+  uri: string;
+  /** 符号类型（类、方法、变量等） */
+  kind: vscode.SymbolKind;
+  /** 父符号名称（如果该符号是类的方法或属性） */
+  parentName?: string;
 }

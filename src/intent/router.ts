@@ -205,7 +205,7 @@ export class IntentRouter implements IIntentRouter {
 
     if (matchCount > 0) {
       // 如果有选中代码，置信度更高
-      const hasSelection = context.selection && context.selection.text.length > 0;
+      const hasSelection = context.selection && context.selection.content.length > 0;
       const baseConfidence = 0.6 + (matchCount * 0.1);
       const confidence = hasSelection ? Math.min(0.9, baseConfidence + 0.1) : baseConfidence;
 

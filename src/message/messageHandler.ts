@@ -104,7 +104,7 @@ export class MessageHandler implements IMessageHandler {
     // 设置默认配置
     this.config = {
       enableStreaming: config?.enableStreaming ?? true,
-      defaultTemperature: config?.defaultTemperature ?? 0.7,
+      defaultTemperature: config?.defaultTemperature ?? 0.6,
       defaultMaxTokens: config?.defaultMaxTokens ?? 2000,
       includeContext: config?.includeContext ?? true
     };
@@ -359,19 +359,22 @@ export class MessageHandler implements IMessageHandler {
     if (messages.length === 0 || messages[0].role !== 'system') {
       messages.unshift({
         role: 'system',
-        content: '你是一个专业的编程助手，能够帮助开发者解决编程问题、理解代码和提供技术建议。',
+        content: 'You are a professional programming assistant named "Hicode", which can assist developers in solving programming problems, understanding code, and providing technical advice.',
         timestamp: new Date()
       });
     }
 
     // 构建请求
+    // temperature 和 maxTokens 不再单独传递，temperature 会从模型配置中获取，maxTokens 不设置
     const request: ChatRequest = {
       messages,
       model: session.model,
-      stream: options?.stream ?? this.config.enableStreaming,
-      temperature: options?.temperature ?? this.config.defaultTemperature,
-      maxTokens: options?.maxTokens ?? this.config.defaultMaxTokens
-    };
+      stream: options?.stream ?? this.config.enableStreaming
+      // temperature 和 maxTokens 已移除，temperature 从模型配置中获取，maxTokens 不设置
+    } as ChatRequest;
+
+    // 添加 sessionId 到请求中（用于 gRPC 调用）
+    (request as any).sessionId = sessionId;
 
     return request;
   }

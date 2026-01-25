@@ -45,6 +45,12 @@ export const HICODE_CHANGE_MODE_F2B_REQ = 'hicode_change_mode_f2b_req';
 /** 后端响应：切换聊天模式响应 */
 export const HICODE_CHANGE_MODE_B2F_RES = 'hicode_change_mode_b2f_res';
 
+/** 前端请求：切换 Agent 模式 */
+export const HICODE_CHANGE_AGENT_MODE_F2B_REQ = 'hicode_change_agent_mode_f2b_req';
+
+/** 后端响应：切换 Agent 模式响应 */
+export const HICODE_CHANGE_AGENT_MODE_B2F_RES = 'hicode_change_agent_mode_b2f_res';
+
 /** 前端请求：新增模型配置 */
 export const HICODE_ADD_MODEL_F2B_REQ = 'hicode_add_model_f2b_req';
 

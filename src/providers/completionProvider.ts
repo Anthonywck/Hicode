@@ -279,12 +279,16 @@ export class AICompletionProvider {
     // 更新光标位置信息
     const offset = document.offsetAt(position);
     const text = document.getText();
+    const language = document.languageId;
+    const filePath = document.uri.fsPath;
     
     context.cursorContext = {
       line: position.line,
       column: position.character,
       beforeCursor: text.substring(0, offset),
-      afterCursor: text.substring(offset)
+      afterCursor: text.substring(offset),
+      language: language,
+      path: filePath
     };
 
     return context;

@@ -352,6 +352,19 @@
           "default": "chat",
           "description": "Current conversation mode: 'chat' for standard chat or 'agent' for agent mode"
         },
+        "hicode.agentMode": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "agent"
+          ],
+          "enumDescriptions": [
+            "Chat mode: Standard conversational AI assistant",
+            "Agent mode: AI agent with task execution capabilities"
+          ],
+          "default": "chat",
+          "description": "Agent mode selection: 'chat' for standard chat or 'agent' for agent mode"
+        },
         "hicode.completionDelay": {
           "type": "number",
           "default": 300,

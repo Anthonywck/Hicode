@@ -62,7 +62,7 @@ export class ContextCollector implements IContextCollector {
       
       // 提取选中的代码
       if (ctx.selection) {
-        context.selection = ctx.selection.text || '';
+        context.selection = ctx.selection.content || '';
         this.logger.debug('提取选中代码', {
           selectionLength: context.selection.length,
           startLine: ctx.selection.startLine,

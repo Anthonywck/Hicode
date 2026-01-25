@@ -310,7 +310,7 @@ export class DeepSeekAdapter implements ModelAdapter {
 
       // 添加选中的代码
       if (ctx.selection) {
-        content += `\n\n选中的代码：\n\`\`\`${ctx.currentFile.language}\n${ctx.selection.text}\n\`\`\``;
+        content += `\n\n选中的代码：\n\`\`\`${ctx.currentFile.language}\n${ctx.selection.content}\n\`\`\``;
       }
 
       // 添加当前文件信息

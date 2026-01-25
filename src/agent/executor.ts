@@ -24,7 +24,7 @@ export class AgentExecutor {
   async execute(task: AgentTask, context: CodeContext): Promise<AgentResult> {
     try {
       // 构建提示词
-      const code = context.selection?.text || context.currentFile.content;
+      const code = context.selection?.content || context.currentFile.content;
       const language = context.currentFile.language;
       const prompt = buildTaskPrompt(task, code, language);
 

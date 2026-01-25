@@ -309,7 +309,7 @@ export class OpenAIAdapter implements ModelAdapter {
 
       // 添加选中的代码
       if (ctx.selection) {
-        content += `\n\nSelected code:\n\`\`\`${ctx.currentFile.language}\n${ctx.selection.text}\n\`\`\``;
+        content += `\n\nSelected code:\n\`\`\`${ctx.currentFile.language}\n${ctx.selection.content}\n\`\`\``;
       }
 
       // 添加当前文件信息

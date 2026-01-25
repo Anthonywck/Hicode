@@ -587,6 +587,7 @@ export async function getConfigManager(): Promise<any> {
 /**
  * 获取 API 客户端管理器（懒加载，单例）
  * 需求: 1.5
+ * 修改：强制使用 gRPC 方式调用 Agent，停用本地 API 调用
  */
 export async function getAPIClient(): Promise<any> {
   if (!apiClientModule) {
@@ -594,49 +595,24 @@ export async function getAPIClient(): Promise<any> {
   }
   
   if (!apiClientInstance) {
-    const APIClientManagerClass = await apiClientModule.load();
     const configMgr = await getConfigManager();
     
-    // 获取 PromptManager 实例
-    const promptManager = await getPromptManager();
+    // 强制使用 gRPC 方式，所有 API 调用都通过 Agent 服务
+    console.log('[APIClient] Using gRPC mode - all API calls will be routed to Agent service');
     
-    // 创建 API 客户端，传入 promptManager
-    apiClientInstance = new APIClientManagerClass(configMgr.models, promptManager);
+    // 导入 gRPC API 客户端
+    const { GrpcAPIClient } = await import('./api/grpc_api_client');
+    
+    // 创建 gRPC API 客户端
+    apiClientInstance = new GrpcAPIClient(configMgr.models);
     
     // 初始化 PromptManager 的依赖（注入 API 客户端到 IntentRecognizer）
+    // 注意：IntentRecognizer 也需要使用 gRPC 客户端
     await initializePromptManagerDependencies();
     
-    // 注册默认的adapters
-    const { DeepSeekAdapter } = await import('./api/adapters/deepseek');
-    const { OpenAIAdapter } = await import('./api/adapters/openai');
-    const { ZhipuAIAdapter } = await import('./api/adapters/zhipuai');
-    
-    // 获取所有模型配置并为每个vendor注册adapter
-    const models = configMgr.models.getModelConfigs();
-    const registeredVendors = new Set<string>();
-    
-    for (const model of models) {
-      if (model.vendor && !registeredVendors.has(model.vendor)) {
-        let adapter;
-        switch (model.vendor) {
-          case 'deepseek':
-            adapter = new DeepSeekAdapter(model, promptManager);
-            break;
-          case 'openai':
-            adapter = new OpenAIAdapter(model, promptManager);
-            break;
-          case 'zhipuai':
-            adapter = new ZhipuAIAdapter(model, promptManager);
-            break;
-          default:
-            // 对于未知的vendor，使用OpenAI兼容的adapter
-            adapter = new OpenAIAdapter(model, promptManager);
-        }
-        
-        apiClientInstance.registerAdapter(model.vendor, adapter);
-        registeredVendors.add(model.vendor);
-      }
-    }
+    // 本地 API 适配器已停用，不再注册
+    // 所有 API 调用都通过 gRPC 路由到 Agent 服务
+    console.log('[APIClient] Local API adapters disabled, using gRPC only');
   }
   
   return apiClientInstance;
