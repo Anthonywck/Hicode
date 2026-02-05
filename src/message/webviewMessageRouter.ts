@@ -23,6 +23,8 @@ import {
   handleAddModel,
   handleEditModel,
   handleDeleteModel,
+  handleGetProviders,
+  handleGetProviderModels,
   handleGetSettings,
   handleGetHistory,
   handleWebviewReady,
@@ -134,6 +136,18 @@ export function routeWebviewMessage(
         });
         break;
 
+      case MessageType.HICODE_GET_PROVIDERS_F2B_REQ:
+        handleGetProviders(message, webview).catch(error => {
+          logger.error('处理获取 Provider 列表失败', error, 'WebviewMessageRouter');
+        });
+        break;
+
+      case MessageType.HICODE_GET_PROVIDER_MODELS_F2B_REQ:
+        handleGetProviderModels(message, webview).catch(error => {
+          logger.error('处理获取 Provider 模型列表失败', error, 'WebviewMessageRouter');
+        });
+        break;
+
       // ========== 设置相关消息 ==========
       case MessageType.HICODE_GET_SETTINGS_F2B_REQ:
         handleGetSettings(message, webview).catch(error => {
@@ -239,6 +253,12 @@ export function routeWebviewMessage(
         vscode.window.showErrorMessage(
           `聊天界面错误: ${message.data || '未知错误'}`
         );
+        break;
+
+      case 'finishedChat':
+        // 处理前端发送的聊天完成通知（前端可能发送此消息表示流式响应已接收完成）
+        logger.debug('收到聊天完成通知', { messageType, message }, 'WebviewMessageRouter');
+        // 不需要特殊处理，只是确认收到
         break;
 
       default:

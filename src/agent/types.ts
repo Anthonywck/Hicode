@@ -4,6 +4,7 @@
  */
 
 import { CodeContext } from '../api/types';
+import { PermissionRuleset } from '../permission';
 
 /**
  * Agent任务类型
@@ -72,4 +73,48 @@ export interface AgentHistoryEntry {
   result: AgentResult;
   /** 代码上下文 */
   context: CodeContext;
+}
+
+/**
+ * Agent类型
+ */
+export type AgentType = 'build' | 'plan' | 'general' | 'explore';
+
+/**
+ * Agent模式
+ */
+export type AgentMode = 'primary' | 'subagent' | 'all';
+
+/**
+ * Agent配置
+ */
+export interface AgentConfig {
+  /** Agent类型 */
+  type: AgentType;
+  /** Agent名称 */
+  name: string;
+  /** Agent描述 */
+  description?: string;
+  /** 提示词模板 */
+  prompt?: string;
+  /** 模型ID */
+  modelId?: string;
+  /** Agent模式 */
+  mode?: AgentMode;
+  /** 权限规则集 */
+  permission?: PermissionRuleset;
+  /** 是否启用 */
+  enabled?: boolean;
+  /** 是否隐藏（不显示在列表中） */
+  hidden?: boolean;
+  /** 温度参数 */
+  temperature?: number;
+  /** Top-p参数 */
+  topP?: number;
+  /** 最大步数 */
+  steps?: number;
+  /** 是否为原生Agent */
+  native?: boolean;
+  /** 其他选项 */
+  options?: Record<string, any>;
 }

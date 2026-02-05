@@ -121,6 +121,16 @@
         "command": "hicode.cancelCodeChange",
         "title": "HiCode: Cancel Code Change",
         "category": "HiCode"
+      },
+      {
+        "command": "hicode.addSelectionToChat",
+        "title": "HiCode: Add Selection to Chat",
+        "category": "HiCode"
+      },
+      {
+        "command": "hicode.quickEdit",
+        "title": "HiCode: Quick Edit",
+        "category": "HiCode"
       }
     ],
     "keybindings": [
@@ -178,6 +188,18 @@
         "when": "editorTextFocus"
       },
       {
+        "command": "hicode.addSelectionToChat",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorHasSelection && !suggestWidgetVisible && !parameterHintsVisible"
+      },
+      {
+        "command": "hicode.quickEdit",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "editorHasSelection && !suggestWidgetVisible && !parameterHintsVisible"
+      },
+      {
         "command": "hicode.undoAgentAction",
         "key": "ctrl+shift+z",
         "mac": "cmd+shift+z"
@@ -195,7 +217,7 @@
         "when": "editorTextFocus"
       }
     ],
-      "menus": {
+    "menus": {
       "view/title": [
         {
           "command": "hicode.newConversation",
@@ -506,7 +528,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-prompts.js",
     "watch": "tsc --watch",
     "vscode:prepublish": "npm run build",
     "package": "vsce package",
@@ -515,6 +537,7 @@
     "package:patch": "vsce package --patch"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/jest": "^29.5.11",
     "@types/node": "^20.10.6",
     "@types/uuid": "^9.0.7",
@@ -526,10 +549,22 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.33",
+    "@ai-sdk/google": "^3.0.18",
+    "@ai-sdk/openai": "^3.0.23",
+    "@ai-sdk/openai-compatible": "^2.0.24",
+    "@grpc/grpc-js": "^1.9.14",
+    "@grpc/proto-loader": "^0.7.10",
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "@types/glob": "^8.1.0",
+    "ai": "^6.0.64",
     "axios": "^1.6.5",
+    "diff": "^5.2.2",
     "eventsource": "^2.0.2",
     "fast-check": "^3.15.0",
-    "uuid": "^9.0.1"
+    "glob": "^10.5.0",
+    "uuid": "^9.0.1",
+    "zod": "^3.22.4"
   },
   "engines": {
     "vscode": "^1.85.0"

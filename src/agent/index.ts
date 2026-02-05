@@ -18,5 +18,10 @@ export {
   AgentTaskType,
   AgentResult,
   CodeChange,
-  AgentHistoryEntry
+  AgentHistoryEntry,
+  AgentType,
+  AgentMode,
+  AgentConfig
 } from './types';
+export { AgentRegistry, getAgentRegistry, IAgentRegistry } from './registry';
+export { Agent } from './agent';

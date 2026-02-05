@@ -591,14 +591,42 @@ export class LocalModeManager implements ILocalModeManager {
 
     // 创建本地模型配置
     const config: LocalModelConfig = {
-      modelId,
-      modelName,
+      modelId: modelId || `${modelName}-local`,
       displayName,
+      providerID: 'custom',
+      modelID: modelName,
+      api: {
+        id: modelName,
+        url: defaultEndpoint || this.getConfig().localEndpoint || 'http://localhost:8080',
+        npm: '@ai-sdk/openai-compatible',
+      },
+      capabilities: {
+        temperature: true,
+        reasoning: false,
+        attachment: false,
+        toolcall: false,
+        input: { text: true, audio: false, image: false, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+      },
+      limit: {
+        context: 4096,
+        output: 2048,
+      },
+      cost: {
+        input: 0,
+        output: 0,
+        cache: { read: 0, write: 0 },
+      },
+      status: 'active',
+      release_date: new Date().toISOString().split('T')[0],
+      options: {},
+      // 向后兼容字段
       vendor: 'custom',
-      apiKey: '',
+      modelName,
       apiBaseUrl: defaultEndpoint || this.getConfig().localEndpoint || 'http://localhost:8080',
       maxContextTokens: 4096,
       supportMultimodal: false,
+      apiKey: '',
       isLocal: true
     };
 

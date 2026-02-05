@@ -224,7 +224,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
             content: prompt,
           },
         ],
-        model: this.config.modelName,
+        model: this.config.modelName || this.config.modelId,
         stream: false,
         temperature: 0.2, // 较低的温度以获得更确定的补全
         maxTokens: 100,
@@ -233,7 +233,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
       const response = await this.chat(request);
 
       // 解析补全建议
-      return this.parseCompletionResponse(response.content);
+      return this.parseCompletionResponse(response.content || '');
     } catch (error) {
       console.error('ZhipuAI completion error:', error);
       return [];
@@ -258,7 +258,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
             content: '你好',
           },
         ],
-        model: config.modelName,
+        model: config.modelName || config.modelId,
         stream: false,
         maxTokens: 5,
       };
@@ -308,8 +308,8 @@ export class ZhipuAIAdapter implements ModelAdapter {
   private convertFromZhipuAIFormat(response: ZhipuAIChatResponse): ChatResponse {
     const choice = response.choices[0];
     return {
-      content: choice.message.content,
-      finishReason: this.mapFinishReason(choice.finish_reason),
+      content: choice.message.content || '',
+      finishReason: this.mapFinishReason(choice.finish_reason || 'stop'),
       usage: {
         promptTokens: response.usage.prompt_tokens,
         completionTokens: response.usage.completion_tokens,

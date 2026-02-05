@@ -186,6 +186,9 @@ export class GrpcAPIClient implements IAPIClient {
       };
     }
 
+    // 获取 resources（从请求中提取）
+    const resources = (request as any).resources || [];
+
     // 构建符合 proto 定义的请求对象
     const grpcRequest: any = {
       messages: protoMessages,
@@ -209,7 +212,17 @@ export class GrpcAPIClient implements IAPIClient {
       context: contextObj,
       agent_mode: agentMode,
       prompt_type: promptType,
-      language: language
+      language: language,
+      // 添加 resources（作为扩展字段，传递给 agent grpc 服务）
+      resources: resources.map((r: any) => ({
+        type: r.type || 'code',
+        code: r.code || '',
+        language: r.languageId || r.language || '',
+        language_id: r.languageId || r.language || '',
+        file_path: r.filePath || '',
+        start_line: r.startLine || 0,
+        end_line: r.endLine || 0
+      }))
     };
 
     // 不再单独传递 temperature 和 max_tokens，temperature 已在 model_config 中，max_tokens 不设置

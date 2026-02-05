@@ -146,7 +146,7 @@ export class GrpcClientManager {
           (buffer: Buffer) => JSON.parse(buffer.toString()) as ChatReply,
           request,
           metadata,
-          (error, response) => {
+          (error: any, response) => {
             if (error) {
               console.error('❌ 聊天请求失败:', error);
               reject(error);

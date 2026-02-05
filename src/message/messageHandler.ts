@@ -1,13 +1,19 @@
 /**
  * Message Handler
  * 处理聊天消息的发送和接收，集成API Client和Context Manager
+ * 使用新的 Session 系统替代 HistoryManager
  */
 
 import { APIClientManager } from '../api/client';
 import { ContextManager } from '../context/manager';
-import { HistoryManager } from '../history/manager';
 import { ChatRequest, ChatMessage, ChatResponse } from '../api/types';
-import { ChatMessage as HistoryChatMessage } from '../history/types';
+import { Session } from '../session/sessionClass';
+import { SessionFactory, getSessionFactory } from '../session/factory';
+import { SessionManager, getSessionManager } from '../session/session';
+import { prompt, PromptInput } from '../session/prompt';
+import { MessageWithParts, MessageRole } from '../session/message';
+import * as vscode from 'vscode';
+import { getExtensionContext } from '../extension';
 
 /**
  * 消息处理器配置
@@ -24,6 +30,26 @@ export interface MessageHandlerConfig {
 }
 
 /**
+ * 资源数据结构
+ */
+export interface ResourceData {
+  /** 资源类型 */
+  type: 'code' | 'file' | 'image' | 'folder';
+  /** 代码内容（type为code时使用） */
+  code?: string;
+  /** 代码语言（type为code时使用） */
+  language?: string;
+  /** 代码语言ID（type为code时使用） */
+  languageId?: string;
+  /** 文件路径 */
+  filePath?: string;
+  /** 起始行号（type为code时使用） */
+  startLine?: number;
+  /** 结束行号（type为code时使用） */
+  endLine?: number;
+}
+
+/**
  * 发送消息的选项
  */
 export interface SendMessageOptions {
@@ -37,6 +63,8 @@ export interface SendMessageOptions {
   includeContext?: boolean;
   /** 会话ID（如果不提供则使用当前会话） */
   sessionId?: string;
+  /** 资源列表 */
+  resources?: ResourceData[];
 }
 
 /**
@@ -91,14 +119,16 @@ export interface IMessageHandler {
 
 /**
  * 消息处理器实现
+ * 使用新的 Session 系统替代 HistoryManager
  */
 export class MessageHandler implements IMessageHandler {
   private config: Required<MessageHandlerConfig>;
+  private sessionFactory: SessionFactory | null = null;
+  private sessionManager: SessionManager | null = null;
 
   constructor(
     private apiClient: APIClientManager,
     private contextManager: ContextManager,
-    private historyManager: HistoryManager,
     config?: MessageHandlerConfig
   ) {
     // 设置默认配置
@@ -111,7 +141,19 @@ export class MessageHandler implements IMessageHandler {
   }
 
   /**
+   * 初始化 Session 工厂和管理器
+   */
+  private async initializeSession(): Promise<void> {
+    if (!this.sessionFactory || !this.sessionManager) {
+      const context = await getExtensionContext();
+      this.sessionFactory = getSessionFactory(context);
+      this.sessionManager = getSessionManager(context);
+    }
+  }
+
+  /**
    * 发送消息（非流式）
+   * 注意：非流式消息现在通过流式接口实现，然后等待完成
    */
   async handleSendMessage(
     content: string,
@@ -122,53 +164,46 @@ export class MessageHandler implements IMessageHandler {
       throw new Error('Message content cannot be empty');
     }
 
-    // 获取或创建会话
-    const session = this.getOrCreateSession(options?.sessionId);
+    // 累积响应内容
+    let accumulatedContent = '';
+    let finalResponse: ChatResponse | null = null;
 
-    // 收集代码上下文（如果启用）
-    const includeContext = options?.includeContext ?? this.config.includeContext;
-    const context = includeContext 
-      ? await this.contextManager.getCurrentContext()
-      : undefined;
+    // 使用流式接口，但等待完成
+    await this.handleSendStreamMessage(
+      content,
+      {
+        onChunk: (chunk: string) => {
+          accumulatedContent += chunk;
+        },
+        onEnd: () => {
+          // 流结束，构建响应
+          finalResponse = {
+            content: accumulatedContent,
+            finishReason: 'stop',
+            usage: {
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0
+            }
+          };
+        },
+        onError: (error: Error) => {
+          throw error;
+        }
+      },
+      options
+    );
 
-    // 创建用户消息
-    const userMessage: ChatMessage = {
-      role: 'user',
-      content: content.trim(),
-      context,
-      timestamp: new Date()
-    };
-
-    // 添加到历史记录
-    this.historyManager.addMessage(session.id, userMessage as HistoryChatMessage);
-
-    // 构建请求
-    const request = this.buildChatRequest(session.id, options);
-
-    try {
-      // 发送请求
-      const response = await this.apiClient.sendChatRequest(request);
-
-      // 创建助手消息
-      const assistantMessage: ChatMessage = {
-        role: 'assistant',
-        content: response.content,
-        timestamp: new Date()
-      };
-
-      // 添加到历史记录
-      this.historyManager.addMessage(session.id, assistantMessage as HistoryChatMessage);
-
-      return response;
-    } catch (error) {
-      // 记录错误
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to send message: ${errorMessage}`);
+    if (!finalResponse) {
+      throw new Error('Failed to get response');
     }
+
+    return finalResponse;
   }
 
   /**
    * 发送流式消息
+   * 使用新的 Session 系统和主循环
    */
   async handleSendStreamMessage(
     content: string,
@@ -181,91 +216,79 @@ export class MessageHandler implements IMessageHandler {
       return;
     }
 
-    // 获取或创建会话
-    const session = this.getOrCreateSession(options?.sessionId);
-
-    // 收集代码上下文（如果启用）
-    // 注意：上下文收集可能会比较耗时，考虑优化或异步处理
-    const includeContext = options?.includeContext ?? this.config.includeContext;
-    const contextStartTime = Date.now();
-    const context = includeContext 
-      ? await this.contextManager.getCurrentContext()
-      : undefined;
-    const contextTime = Date.now() - contextStartTime;
-    
-    if (contextTime > 100) {
-      console.warn(`[MessageHandler] Context collection took ${contextTime}ms, consider optimizing`);
-    }
-
-    // 创建用户消息
-    const userMessage: ChatMessage = {
-      role: 'user',
-      content: content.trim(),
-      context,
-      timestamp: new Date()
-    };
-
-    // 添加到历史记录
-    // 检查是否重复添加（防止重复）
-    const existingMessages = session.messages;
-    const isDuplicate = existingMessages.length > 0 && 
-      existingMessages[existingMessages.length - 1].role === 'user' &&
-      existingMessages[existingMessages.length - 1].content === userMessage.content;
-    
-    if (isDuplicate) {
-      console.warn(`[MessageHandler] Duplicate message detected, skipping addMessage`);
-    } else {
-      this.historyManager.addMessage(session.id, userMessage as HistoryChatMessage);
-    }
-
-    // 构建请求（强制使用流式）
-    const request = this.buildChatRequest(session.id, { ...options, stream: true });
-
-    // 累积响应内容
-    let accumulatedContent = '';
-
-    // 包装回调以累积内容
-    const wrappedOnChunk = (chunk: string) => {
-      accumulatedContent += chunk;
-      callbacks.onChunk(chunk);
-    };
-
-    const wrappedOnEnd = () => {
-      // 创建助手消息
-      const assistantMessage: ChatMessage = {
-        role: 'assistant',
-        content: accumulatedContent,
-        timestamp: new Date()
-      };
-
-      // 添加到历史记录
-      // 检查是否重复添加（防止重复）
-      const existingMessages = this.historyManager.getSession(session.id)?.messages || [];
-      const isDuplicate = existingMessages.length > 0 && 
-        existingMessages[existingMessages.length - 1].role === 'assistant' &&
-        existingMessages[existingMessages.length - 1].content === assistantMessage.content;
+    try {
+      // 初始化 Session 系统
+      await this.initializeSession();
       
-      if (isDuplicate) {
-        console.warn(`[MessageHandler] Duplicate assistant message detected, skipping addMessage`);
-      } else {
-        this.historyManager.addMessage(session.id, assistantMessage as HistoryChatMessage);
+      if (!this.sessionFactory || !this.sessionManager) {
+        throw new Error('Session system not initialized');
       }
 
+      // 获取或创建会话
+      const session = await this.getOrCreateSession(options?.sessionId);
+
+      // 获取当前模型配置
+      const currentModelId = this.apiClient.getCurrentModel();
+      
+      if (!currentModelId) {
+        throw new Error('No model is currently selected. Please select a model first.');
+      }
+
+      // 解析模型ID (格式: providerID/modelID)
+      const [providerID, modelID] = currentModelId.includes('/')
+        ? currentModelId.split('/', 2)
+        : ['openai', currentModelId];
+
+      // 构建 PromptInput
+      const promptInput: PromptInput = {
+        sessionID: session.info.id,
+        model: {
+          providerID,
+          modelID,
+        },
+        parts: [
+          {
+            type: 'text',
+            text: content.trim(),
+          },
+        ],
+      };
+
+      // 如果有资源，添加文件部分
+      if (options?.resources && options.resources.length > 0) {
+        for (const resource of options.resources) {
+          if (resource.type === 'file' && resource.filePath) {
+            promptInput.parts.push({
+              type: 'file',
+              url: resource.filePath,
+              filename: resource.filePath.split('/').pop() || resource.filePath,
+            });
+          } else if (resource.type === 'code' && resource.code) {
+            // 代码资源转换为文本
+            promptInput.parts.push({
+              type: 'text',
+              text: `\n\`\`\`${resource.language || 'text'}\n${resource.code}\n\`\`\`\n`,
+            });
+          }
+        }
+      }
+
+      // 启动主循环，直接传递回调函数以支持实时流式更新
+      // 移除轮询机制，改为直接回调方式（参考 opencode 的实现）
+      const result = await prompt({
+        ...promptInput,
+        onTextChunk: (chunk: string) => {
+          // 实时发送文本增量到前端
+          callbacks.onChunk(chunk);
+        },
+        onToolCallUpdate: (toolCall: any) => {
+          // 实时发送工具调用更新到前端
+          // TODO: 可以通过消息类型发送工具调用更新
+        },
+      });
+      
+      // 发送完成标志
       callbacks.onEnd();
-    };
-
-    const wrappedOnError = (error: Error) => {
-      callbacks.onError(error);
-    };
-
-    try {
-      // 发送流式请求
-      await this.apiClient.sendStreamChatRequest(
-        request,
-        wrappedOnChunk,
-        wrappedOnEnd,
-        wrappedOnError
-      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       callbacks.onError(new Error(`Failed to send stream message: ${errorMessage}`));
@@ -273,110 +296,346 @@ export class MessageHandler implements IMessageHandler {
   }
 
   /**
+   * 在处理过程中轮询流式响应
+   * 在 prompt 执行的同时开始轮询，以实时获取文本更新
+   */
+  private async processStreamResponseWhileRunning(
+    session: Session,
+    promptPromise: Promise<MessageWithParts>,
+    callbacks: StreamCallbacks
+  ): Promise<void> {
+    try {
+      // 累积文本内容
+      let accumulatedText = '';
+      const processedToolCalls = new Set<string>();
+      let lastMessageId: string | null = null;
+
+      // 轮询消息部分的变化（直到 prompt 完成）
+      const maxPollingTime = 300000; // 5分钟超时
+      const pollingInterval = 20; // 20ms轮询间隔，更频繁的轮询以实现更好的流式效果
+      const startTime = Date.now();
+
+      // 等待一小段时间让 prompt 开始创建助手消息
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // 尝试获取最新的助手消息ID
+      const messages: MessageWithParts[] = [];
+      for await (const msg of session.getMessages()) {
+        if (msg.role === MessageRole.Assistant) {
+          messages.push(msg);
+        }
+      }
+      
+      if (messages.length > 0) {
+        lastMessageId = messages[0].id;
+      }
+
+      // 如果还没有消息ID，等待 prompt 完成
+      if (!lastMessageId) {
+        const result = await promptPromise;
+        lastMessageId = result.id;
+      }
+
+      while (Date.now() - startTime < maxPollingTime) {
+        if (!lastMessageId) {
+          // 如果还没有消息ID，尝试再次获取
+          const messages: MessageWithParts[] = [];
+          for await (const msg of session.getMessages()) {
+            if (msg.role === MessageRole.Assistant) {
+              messages.push(msg);
+            }
+          }
+          if (messages.length > 0) {
+            lastMessageId = messages[0].id;
+          } else {
+            // 如果仍然没有消息，等待一小段时间后继续
+            await new Promise(resolve => setTimeout(resolve, pollingInterval));
+            continue;
+          }
+        }
+
+        // 获取消息的所有部分
+        const parts = await session.getParts(lastMessageId);
+
+        // 处理每个部分
+        for (const part of parts) {
+          if (part.type === 'text') {
+            // 文本部分：发送增量
+            const textPart = part as any;
+            const currentText = textPart.text || '';
+            if (currentText.length > accumulatedText.length) {
+              const newText = currentText.slice(accumulatedText.length);
+              callbacks.onChunk(newText);
+              accumulatedText = currentText;
+            }
+          } else if (part.type === 'tool-call') {
+            // 工具调用：发送工具调用状态更新
+            const toolPart = part as any;
+            const toolCallId = toolPart.toolCallId;
+
+            // 只处理新的或状态变化的工具调用
+            if (!processedToolCalls.has(toolCallId) || 
+                (toolPart.state.status === 'completed' || toolPart.state.status === 'error')) {
+              
+              if (toolPart.state.status === 'pending') {
+                callbacks.onChunk(`\n[准备调用工具: ${toolPart.tool}]\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'running') {
+                callbacks.onChunk(`\n[正在执行工具: ${toolPart.tool}]\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'completed') {
+                const output = toolPart.state.output || '';
+                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行完成]\n${output}\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'error') {
+                const error = toolPart.state.error || '未知错误';
+                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行失败: ${error}]\n`);
+                processedToolCalls.add(toolCallId);
+              }
+            }
+          }
+        }
+
+        // 检查消息是否完成
+        const message = await session.getMessage(lastMessageId);
+        if (message && message.role === MessageRole.Assistant) {
+          const assistantMsg = message as any;
+          if (assistantMsg.time?.completed || assistantMsg.finish) {
+            // 消息已完成，退出轮询
+            break;
+          }
+        }
+
+        // 检查 prompt 是否已完成（非阻塞）
+        const isPromptDone = await Promise.race([
+          promptPromise.then(() => true).catch(() => false),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(false), 0))
+        ]);
+
+        if (isPromptDone) {
+          // prompt 已完成，最后检查一次消息是否完成
+          const finalMessage = await session.getMessage(lastMessageId);
+          if (finalMessage && finalMessage.role === MessageRole.Assistant) {
+            const assistantMsg = finalMessage as any;
+            if (assistantMsg.time?.completed || assistantMsg.finish) {
+              break;
+            }
+          }
+        }
+
+        // 等待一段时间后继续轮询
+        await new Promise(resolve => setTimeout(resolve, pollingInterval));
+      }
+
+      // 发送完成标志
+      callbacks.onEnd();
+    } catch (error) {
+      callbacks.onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * 处理流式响应
+   * 监听消息部分的变化并调用回调
+   * 
+   * 注意：当前实现是轮询方式，未来可以改为事件驱动方式以获得更好的实时性
+   */
+  private async processStreamResponse(
+    session: Session,
+    result: MessageWithParts,
+    callbacks: StreamCallbacks
+  ): Promise<void> {
+    try {
+      // 累积文本内容
+      let accumulatedText = '';
+      const processedToolCalls = new Set<string>();
+
+      // 先检查一次消息是否已经完成
+      let messageCompleted = false;
+      const initialMessage = await session.getMessage(result.id);
+      if (initialMessage && initialMessage.role === MessageRole.Assistant) {
+        const assistantMsg = initialMessage as any;
+        messageCompleted = !!(assistantMsg.time?.completed || assistantMsg.finish);
+      }
+
+      // 如果消息已经完成，直接发送所有文本内容
+      if (messageCompleted) {
+        const parts = await session.getParts(result.id);
+        for (const part of parts) {
+          if (part.type === 'text') {
+            const textPart = part as any;
+            const currentText = textPart.text || '';
+            if (currentText.length > accumulatedText.length) {
+              const newText = currentText.slice(accumulatedText.length);
+              callbacks.onChunk(newText);
+              accumulatedText = currentText;
+            }
+          }
+        }
+        // 发送完成标志
+        callbacks.onEnd();
+        return;
+      }
+
+      // 轮询消息部分的变化（直到消息完成）
+      const maxPollingTime = 300000; // 5分钟超时
+      const pollingInterval = 100; // 100ms轮询间隔
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < maxPollingTime) {
+        // 获取消息的所有部分
+        const parts = await session.getParts(result.id);
+
+        // 处理每个部分
+        for (const part of parts) {
+          if (part.type === 'text') {
+            // 文本部分：发送增量
+            const textPart = part as any;
+            const currentText = textPart.text || '';
+            if (currentText.length > accumulatedText.length) {
+              const newText = currentText.slice(accumulatedText.length);
+              callbacks.onChunk(newText);
+              accumulatedText = currentText;
+            }
+          } else if (part.type === 'tool-call') {
+            // 工具调用：发送工具调用状态更新
+            const toolPart = part as any;
+            const toolCallId = toolPart.toolCallId;
+
+            // 只处理新的或状态变化的工具调用
+            if (!processedToolCalls.has(toolCallId) || 
+                (toolPart.state.status === 'completed' || toolPart.state.status === 'error')) {
+              
+              if (toolPart.state.status === 'pending') {
+                callbacks.onChunk(`\n[准备调用工具: ${toolPart.tool}]\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'running') {
+                callbacks.onChunk(`\n[正在执行工具: ${toolPart.tool}]\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'completed') {
+                const output = toolPart.state.output || '';
+                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行完成]\n${output}\n`);
+                processedToolCalls.add(toolCallId);
+              } else if (toolPart.state.status === 'error') {
+                const error = toolPart.state.error || '未知错误';
+                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行失败: ${error}]\n`);
+                processedToolCalls.add(toolCallId);
+              }
+            }
+          }
+        }
+
+        // 检查消息是否完成
+        const message = await session.getMessage(result.id);
+        if (message && message.role === MessageRole.Assistant) {
+          const assistantMsg = message as any;
+          if (assistantMsg.time?.completed || assistantMsg.finish) {
+            // 消息已完成，退出轮询
+            break;
+          }
+        }
+
+        // 等待一段时间后继续轮询
+        await new Promise(resolve => setTimeout(resolve, pollingInterval));
+      }
+
+      // 发送完成标志
+      callbacks.onEnd();
+    } catch (error) {
+      callbacks.onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
    * 重新发送消息
+   * 注意：新 Session 系统中，需要根据消息ID重新发送
    */
   async resendMessage(
     messageIndex: number,
     options?: SendMessageOptions
   ): Promise<ChatResponse> {
-    // 获取当前会话
-    const session = this.historyManager.getCurrentSession();
-    if (!session) {
-      throw new Error('No active session found');
+    // 初始化 Session 系统
+    await this.initializeSession();
+    if (!this.sessionFactory || !this.sessionManager) {
+      throw new Error('Session system not initialized');
     }
 
+    // 获取会话
+    if (!options?.sessionId) {
+      throw new Error('Session ID is required for resending messages');
+    }
+
+    const session = await this.sessionFactory.getSession(options.sessionId);
+    if (!session) {
+      throw new Error(`Session ${options.sessionId} not found`);
+    }
+
+    // 获取所有消息
+    const messages: MessageWithParts[] = [];
+    for await (const msg of session.getMessages()) {
+      messages.push(msg);
+    }
+
+    // 反转顺序，从旧到新
+    messages.reverse();
+
     // 验证消息索引
-    if (messageIndex < 0 || messageIndex >= session.messages.length) {
+    if (messageIndex < 0 || messageIndex >= messages.length) {
       throw new Error('Invalid message index');
     }
 
     // 获取要重新发送的消息
-    const message = session.messages[messageIndex];
-    if (message.role !== 'user') {
+    const message = messages[messageIndex];
+    if (message.role !== MessageRole.User) {
       throw new Error('Can only resend user messages');
     }
 
+    // 获取消息的文本内容
+    const textParts = message.parts.filter(p => p.type === 'text');
+    const content = textParts.map(p => (p as any).text).join('');
+
+    if (!content) {
+      throw new Error('Message has no text content');
+    }
+
     // 删除该消息之后的所有消息
-    session.messages.splice(messageIndex);
+    // TODO: 实现消息删除功能
+    // 暂时通过创建新会话或使用消息ID来处理
 
     // 重新发送消息
-    return this.handleSendMessage(message.content, {
+    return this.handleSendMessage(content, {
       ...options,
-      sessionId: session.id,
-      includeContext: !!message.context
+      sessionId: options.sessionId,
     });
   }
 
   /**
    * 获取或创建会话
    */
-  private getOrCreateSession(sessionId?: string) {
+  private async getOrCreateSession(sessionId?: string): Promise<Session> {
+    await this.initializeSession();
+    if (!this.sessionFactory || !this.sessionManager) {
+      throw new Error('Session system not initialized');
+    }
+
     if (sessionId) {
-      const session = this.historyManager.getSession(sessionId);
+      const session = await this.sessionFactory.getSession(sessionId);
       if (!session) {
         throw new Error(`Session ${sessionId} not found`);
       }
       return session;
     }
 
-    // 获取当前会话
-    let session = this.historyManager.getCurrentSession();
-    
-    // 如果没有当前会话，创建新会话
-    if (!session) {
-      const currentModel = this.apiClient.getCurrentModel();
-      if (!currentModel) {
-        throw new Error('No model is currently selected');
-      }
-      session = this.historyManager.createSession(currentModel);
+    // 获取当前模型
+    const currentModel = this.apiClient.getCurrentModel();
+    if (!currentModel) {
+      throw new Error('No model is currently selected. Please select a model first.');
     }
+
+    // 创建新会话
+    const session = await this.sessionFactory.createSession(`对话 ${new Date().toLocaleString()}`);
 
     return session;
-  }
-
-  /**
-   * 构建聊天请求
-   */
-  private buildChatRequest(
-    sessionId: string,
-    options?: SendMessageOptions
-  ): ChatRequest {
-    // 获取会话
-    const session = this.historyManager.getSession(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    // 构建消息列表（深拷贝，避免修改原始消息）
-    const messages: ChatMessage[] = session.messages.map(msg => ({
-      ...msg,
-      // 移除context字段，避免在请求中重复包含上下文信息
-      // context信息已经在enrichMessageContent中处理过了
-      context: undefined
-    }));
-
-    // 添加系统消息（如果还没有）
-    if (messages.length === 0 || messages[0].role !== 'system') {
-      messages.unshift({
-        role: 'system',
-        content: 'You are a professional programming assistant named "Hicode", which can assist developers in solving programming problems, understanding code, and providing technical advice.',
-        timestamp: new Date()
-      });
-    }
-
-    // 构建请求
-    // temperature 和 maxTokens 不再单独传递，temperature 会从模型配置中获取，maxTokens 不设置
-    const request: ChatRequest = {
-      messages,
-      model: session.model,
-      stream: options?.stream ?? this.config.enableStreaming
-      // temperature 和 maxTokens 已移除，temperature 从模型配置中获取，maxTokens 不设置
-    } as ChatRequest;
-
-    // 添加 sessionId 到请求中（用于 gRPC 调用）
-    (request as any).sessionId = sessionId;
-
-    return request;
   }
 
   /**

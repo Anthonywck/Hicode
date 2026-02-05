@@ -199,7 +199,7 @@ export class OpenAIAdapter implements ModelAdapter {
             content: prompt,
           },
         ],
-        model: this.config.modelName,
+        model: this.config.modelName || this.config.modelId,
         stream: false,
         temperature: 0.2, // 较低的温度以获得更确定的补全
         maxTokens: 150,
@@ -233,7 +233,7 @@ export class OpenAIAdapter implements ModelAdapter {
             content: 'Hi',
           },
         ],
-        model: config.modelName,
+        model: config.modelName || config.modelId,
         stream: false,
         maxTokens: 5,
       };
@@ -281,8 +281,8 @@ export class OpenAIAdapter implements ModelAdapter {
   private convertFromOpenAIFormat(response: OpenAIChatResponse): ChatResponse {
     const choice = response.choices[0];
     return {
-      content: choice.message.content,
-      finishReason: this.mapFinishReason(choice.finish_reason),
+      content: choice.message.content || '',
+      finishReason: this.mapFinishReason(choice.finish_reason || 'stop'),
       usage: {
         promptTokens: response.usage.prompt_tokens,
         completionTokens: response.usage.completion_tokens,

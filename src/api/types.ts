@@ -6,30 +6,127 @@
 import * as vscode from 'vscode';
 
 /**
- * 模型配置
+ * 模型配置（新版本 - 基于 opencode 架构）
  * 包含模型的基本信息和API连接配置
  */
 export interface ModelConfig {
-  /** 唯一标识符 */
+  /** 唯一标识符（格式：providerID/modelID） */
   modelId: string;
-  /** 模型名称（如gpt-4, deepseek-chat） */
-  modelName: string;
-  /** 显示名称 */
+  
+  /** 显示名称（用户友好） */
   displayName: string;
-  /** 模型提供商 */
-  vendor: 'deepseek' | 'openai' | 'zhipuai' | 'custom';
-  /** 模型描述 */
+  
+  /** 提供商标识 */
+  providerID: string;
+  
+  /** 模型ID（在提供商内的标识） */
+  modelID: string;
+  
+  /** API配置 */
+  api: {
+    /** API模型ID（可能与modelID不同） */
+    id: string;
+    /** API基础URL */
+    url: string;
+    /** 使用的SDK包名 */
+    npm: string;
+  };
+  
+  /** 模型能力 */
+  capabilities: {
+    temperature: boolean;
+    reasoning: boolean;
+    attachment: boolean;
+    toolcall: boolean;
+    input: {
+      text: boolean;
+      audio: boolean;
+      image: boolean;
+      video: boolean;
+      pdf: boolean;
+    };
+    output: {
+      text: boolean;
+      audio: boolean;
+      image: boolean;
+      video: boolean;
+      pdf: boolean;
+    };
+  };
+  
+  /** 模型限制 */
+  limit: {
+    context: number;        // 最大上下文token数（原 maxContextTokens）
+    input?: number;         // 最大输入token数
+    output: number;         // 最大输出token数（原 maxOutputTokens）
+  };
+  
+  /** 成本配置 */
+  cost: {
+    input: number;
+    output: number;
+    cache: {
+      read: number;
+      write: number;
+    };
+  };
+  
+  /** 状态 */
+  status: 'alpha' | 'beta' | 'deprecated' | 'active';
+  
+  /** 发布日期 */
+  release_date: string;
+  
+  /** 自定义选项 */
+  options?: Record<string, any>;
+  
+  /** 自定义Headers */
+  headers?: Record<string, string>;
+  
+  /** 模型描述（用户备注） */
   modelDescription?: string;
-  /** 最大上下文token数（存储为token单位） */
-  maxContextTokens: number;
-  /** 温度参数（默认0.6，不开放给用户配置） */
-  temperature?: number;
-  /** 是否支持多模态 */
-  supportMultimodal: boolean;
-  /** API密钥（存储在SecretStorage） */
-  apiKey: string;
-  /** API基础URL */
-  apiBaseUrl: string;
+  
+  // === 向后兼容字段 ===
+  /** @deprecated 使用 limit.context 替代 */
+  maxContextTokens?: number;
+  /** @deprecated 使用 limit.output 替代 */
+  maxOutputTokens?: number;
+  /** @deprecated 使用 capabilities.input 替代 */
+  supportMultimodal?: boolean;
+  /** @deprecated 使用 providerID 替代 */
+  vendor?: 'deepseek' | 'openai' | 'zhipuai' | 'custom';
+  /** @deprecated 使用 api.id 替代 */
+  modelName?: string;
+  /** @deprecated 使用 api.url 替代 */
+  apiBaseUrl?: string;
+  /** API密钥（存储在SecretStorage，不在此结构中） */
+  apiKey?: string;
+}
+
+/**
+ * Provider 信息
+ */
+export interface ProviderInfo {
+  /** 提供商标识 */
+  id: string;
+  
+  /** 提供商名称 */
+  name: string;
+  
+  /** 配置来源 */
+  source: 'env' | 'config' | 'custom' | 'api';
+  
+  /** 环境变量名列表 */
+  env: string[];
+  
+  /** API密钥 */
+  key?: string;
+  
+  /** 提供商特定选项 */
+  options?: Record<string, any>;
+  
+  /** 该提供商下的模型列表 */
+  models: Record<string, ModelConfig>;
 }
 
 /**
@@ -114,7 +211,7 @@ export interface ChatMessage {
 export interface ChatRequest {
   /** 消息列表 */
   messages: ChatMessage[];
-  /** 模型ID */
+  /** 模型ID（格式：providerID/modelID 或 modelId） */
   model: string;
   /** 是否使用流式响应 */
   stream: boolean;
@@ -204,8 +301,8 @@ export interface IAPIClient {
 }
 
 /**
- * 模型适配器接口
- * 每个模型提供商需要实现此接口
+ * 模型适配器接口（保留用于向后兼容）
+ * @deprecated 使用 Provider 系统替代
  */
 export interface ModelAdapter {
   /**

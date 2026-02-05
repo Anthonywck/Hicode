@@ -14,6 +14,7 @@ import { commandManager } from './commands';
 import { ChatWebviewProvider } from './providers/chatWebviewProvider';
 import * as MessageType from './utils/messageType';
 import { registerDiffPreviewCommands } from './utils/codeDiffPreview';
+import { SelectionActionWidget } from './utils/selectionActionWidget';
 
 /** 扩展版本号 */
 export const version = '0.1.0';
@@ -27,11 +28,8 @@ let apiClientModule: LazyModule<any> | null = null;
 /** 上下文管理器模块 */
 let contextManagerModule: LazyModule<any> | null = null;
 
-/** 历史记录管理器模块 */
-let historyManagerModule: LazyModule<any> | null = null;
-
-/** Agent 系统模块 */
-let agentSystemModule: LazyModule<any> | null = null;
+/** 会话管理器模块 */
+let sessionManagerModule: LazyModule<any> | null = null;
 
 /** 内联聊天提供器模块 */
 let inlineChatProviderModule: LazyModule<any> | null = null;
@@ -60,11 +58,8 @@ let promptManagerInstance: any = null;
 /** 上下文管理器实例 */
 let contextManagerInstance: any = null;
 
-/** 历史记录管理器实例 */
-let historyManagerInstance: any = null;
-
-/** Agent 系统实例 */
-let agentSystemInstance: any = null;
+/** 会话管理器实例 */
+let sessionManagerInstance: any = null;
 
 /** 内联聊天提供器实例 */
 let inlineChatProviderInstance: any = null;
@@ -81,8 +76,21 @@ let completionProviderInstance: any = null;
 /** 聊天 Webview 提供器实例 */
 let chatWebviewProvider: ChatWebviewProvider | null = null;
 
+/** 选择动作悬浮按钮实例 */
+let selectionActionWidget: SelectionActionWidget | null = null;
+
 /** 扩展上下文实例 */
 let extensionContext: vscode.ExtensionContext | null = null;
+
+/**
+ * 获取扩展上下文
+ */
+export async function getExtensionContext(): Promise<vscode.ExtensionContext> {
+  if (!extensionContext) {
+    throw new Error('Extension context not available. Extension may not be activated.');
+  }
+  return extensionContext;
+}
 
 /**
  * 扩展激活函数
@@ -110,6 +118,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     initializeLazyModules();
     timer.mark('lazy-modules-initialized');
 
+    // ========== 第一阶段（续）：初始化新系统 ==========
+    // 初始化 Agent、Tool、MCP 等新系统
+    await initializeNewSystems();
+    timer.mark('new-systems-initialized');
+
     // ========== 第二阶段：初始化命令系统 ==========
     // 命令系统是最轻量的，优先初始化以确保用户可以立即使用命令
     initializeCommandSystem(context);
@@ -134,6 +147,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // 注册代码差异预览的确认/撤销命令
     registerDiffPreviewCommands(context);
     timer.mark('diff-preview-commands-registered');
+
+    // ========== 第四阶段（续）：注册选择动作悬浮按钮 ==========
+    // 注册编辑器选择变化时的悬浮按钮
+    registerSelectionActionWidget(context);
+    timer.mark('selection-action-widget-registered');
 
     // ========== 第五阶段：加载配置 ==========
     // 加载最小必要配置，其他配置在需要时再加载
@@ -313,6 +331,44 @@ export function getChatWebviewProvider(): ChatWebviewProvider | null {
 }
 
 /**
+ * 注册选择动作悬浮按钮
+ * 
+ * 当用户在编辑器中选中代码时，显示悬浮按钮（Add to Chat, Quick Edit）
+ * 
+ * @param context VS Code 扩展上下文
+ */
+function registerSelectionActionWidget(context: vscode.ExtensionContext): void {
+  console.log('Registering selection action widget...');
+
+  try {
+    // 创建选择动作悬浮按钮实例
+    selectionActionWidget = new SelectionActionWidget();
+
+    // 注册 CodeLens 提供器
+    selectionActionWidget.register(context);
+
+    // 添加到订阅列表
+    context.subscriptions.push(selectionActionWidget);
+
+    console.log('✓ Selection action widget registered');
+
+    // 延迟测试按钮显示（用于调试）
+    setTimeout(() => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && !editor.selection.isEmpty) {
+        console.log('[Extension] Initial selection detected, CodeLens should be visible');
+      } else {
+        console.log('[Extension] No initial selection, CodeLens will show when code is selected');
+      }
+    }, 1000);
+  } catch (error) {
+    console.error('Failed to register selection action widget:', error);
+    console.error('Error details:', error instanceof Error ? error.stack : String(error));
+    // 不阻止扩展激活，只记录错误
+  }
+}
+
+/**
  * 注册编辑器选择变化监听器
  * 
  * 监听编辑器中的代码选择变化，当用户选中代码时：
@@ -426,6 +482,73 @@ async function loadMinimalConfiguration(context: vscode.ExtensionContext): Promi
 }
 
 /**
+ * 初始化新系统
+ * 
+ * 初始化 Agent、Tool、MCP 等新系统
+ * 这些系统在扩展激活时就需要初始化，但不会加载重型依赖
+ */
+async function initializeNewSystems(): Promise<void> {
+  console.log('Initializing new systems...');
+
+  // 初始化 Agent 注册表（同步初始化，轻量级）
+  try {
+    const { getAgentRegistry } = await import('./agent/registry');
+    getAgentRegistry();
+    console.log('✓ Agent Registry initialized');
+  } catch (error) {
+    console.warn('Failed to initialize Agent Registry:', error);
+  }
+
+  // 初始化工具注册表并注册所有builtin工具
+  try {
+    const { getToolRegistry, ToolRegistry } = await import('./tool/registry');
+    const registry = getToolRegistry();
+    
+    // 注册所有builtin工具（参考opencode的实现）
+    const {
+      ReadTool,
+      WriteTool,
+      EditTool,
+      BashTool,
+      GrepTool,
+      GlobTool,
+      TaskTool,
+      WebFetchTool,
+      TodoWriteTool,
+      TodoReadTool,
+    } = await import('./tool/builtin');
+    
+    ToolRegistry.registerAll([
+      ReadTool,
+      WriteTool,
+      EditTool,
+      BashTool,
+      GrepTool,
+      GlobTool,
+      TaskTool,
+      WebFetchTool,
+      TodoWriteTool,
+      TodoReadTool,
+    ]);
+    
+    console.log(`✓ Tool Registry initialized with ${registry.size()} tools`);
+  } catch (error) {
+    console.warn('Failed to initialize Tool Registry:', error);
+  }
+
+  // MCP 系统采用懒加载，在需要时再初始化
+  // 这里只确保 MCP 模块可以正常导入
+  try {
+    await import('./mcp/index');
+    console.log('✓ MCP system ready');
+  } catch (error) {
+    console.warn('Failed to load MCP system:', error);
+  }
+
+  console.log('✓ New systems initialized');
+}
+
+/**
  * 初始化懒加载模块
  * 
  * 这些模块不会立即加载，只是准备好加载器
@@ -457,16 +580,10 @@ function initializeLazyModules(): void {
     return ContextManager;
   });
 
-  // 历史记录管理器 - 当访问聊天历史时加载
-  historyManagerModule = createLazyModule(async () => {
-    const { HistoryManager } = await import('./history/manager');
-    return HistoryManager;
-  });
-
-  // Agent 系统 - 当使用 Agent 功能时加载
-  agentSystemModule = createLazyModule(async () => {
-    const { AgentSystem } = await import('./agent/system');
-    return AgentSystem;
+  // 会话管理器 - 当访问会话时加载
+  sessionManagerModule = createLazyModule(async () => {
+    const { getSessionManager } = await import('./session/session');
+    return getSessionManager;
   });
 
   // 意图路由器 - 当需要检测用户意图时加载
@@ -587,7 +704,7 @@ export async function getConfigManager(): Promise<any> {
 /**
  * 获取 API 客户端管理器（懒加载，单例）
  * 需求: 1.5
- * 修改：强制使用 gRPC 方式调用 Agent，停用本地 API 调用
+ * 修改：使用本地 API 调用（AI SDK），不使用 gRPC
  */
 export async function getAPIClient(): Promise<any> {
   if (!apiClientModule) {
@@ -598,21 +715,24 @@ export async function getAPIClient(): Promise<any> {
     const configMgr = await getConfigManager();
     
     // 强制使用 gRPC 方式，所有 API 调用都通过 Agent 服务
-    console.log('[APIClient] Using gRPC mode - all API calls will be routed to Agent service');
+    // console.log('[APIClient] Using gRPC mode - all API calls will be routed to Agent service');
+    // 使用本地 API 调用（AI SDK）
+    console.log('[APIClient] Using local API mode - all API calls will use AI SDK directly');
     
     // 导入 gRPC API 客户端
-    const { GrpcAPIClient } = await import('./api/grpc_api_client');
+    // const { GrpcAPIClient } = await import('./api/grpc_api_client');
+    // 导入本地 API 客户端管理器
+    const { APIClientManager } = await import('./api/client');
     
     // 创建 gRPC API 客户端
-    apiClientInstance = new GrpcAPIClient(configMgr.models);
+    // apiClientInstance = new GrpcAPIClient(configMgr.models);
+    // 创建本地 API 客户端管理器
+    apiClientInstance = new APIClientManager(configMgr.models);
     
-    // 初始化 PromptManager 的依赖（注入 API 客户端到 IntentRecognizer）
-    // 注意：IntentRecognizer 也需要使用 gRPC 客户端
+    // 初始化 PromptManager 的依赖
     await initializePromptManagerDependencies();
     
-    // 本地 API 适配器已停用，不再注册
-    // 所有 API 调用都通过 gRPC 路由到 Agent 服务
-    console.log('[APIClient] Local API adapters disabled, using gRPC only');
+    console.log('[APIClient] Local API adapters enabled, using AI SDK directly');
   }
   
   return apiClientInstance;
@@ -636,10 +756,10 @@ export async function getContextManager(): Promise<any> {
 }
 
 /**
- * 获取历史记录管理器（懒加载，单例）
+ * 获取会话管理器（懒加载，单例）
  */
-export async function getHistoryManager(): Promise<any> {
-  if (!historyManagerModule) {
+export async function getSessionManager(): Promise<any> {
+  if (!sessionManagerModule) {
     throw new Error('Extension not activated');
   }
   
@@ -647,33 +767,12 @@ export async function getHistoryManager(): Promise<any> {
     throw new Error('Extension context not available');
   }
   
-  if (!historyManagerInstance) {
-    const HistoryManagerClass = await historyManagerModule.load();
-    // 导入 VSCodeStorageManager
-    const { VSCodeStorageManager } = await import('./history/storage');
-    const storageManager = new VSCodeStorageManager(extensionContext.globalState);
-    historyManagerInstance = new HistoryManagerClass(storageManager);
+  if (!sessionManagerInstance) {
+    const getSessionManagerFn = await sessionManagerModule.load();
+    sessionManagerInstance = getSessionManagerFn(extensionContext);
   }
   
-  return historyManagerInstance;
-}
-
-/**
- * 获取 Agent 系统（懒加载，单例）
- */
-export async function getAgentSystem(): Promise<any> {
-  if (!agentSystemModule) {
-    throw new Error('Extension not activated');
-  }
-  
-  if (!agentSystemInstance) {
-    const AgentSystemClass = await agentSystemModule.load();
-    const apiClient = await getAPIClient();
-    const contextMgr = await getContextManager();
-    agentSystemInstance = new AgentSystemClass(apiClient, contextMgr);
-  }
-  
-  return agentSystemInstance;
+  return sessionManagerInstance;
 }
 
 /**
@@ -706,16 +805,23 @@ export async function getInlineChatProvider(): Promise<any> {
     const InlineChatProviderClass = await inlineChatProviderModule.load();
     const apiClient = await getAPIClient();
     const contextMgr = await getContextManager();
-    const agentSystem = await getAgentSystem();
-    const historyMgr = await getHistoryManager();
-    const intentRouter = await getIntentRouter();
+    // TODO: Update InlineChatProvider to use new SessionManager (task 6.1)
+    // For now, keep old AgentSystem and HistoryManager for compatibility
+    const { AgentSystem } = await import('./agent/system');
+    const { HistoryManager } = await import('./history/manager');
+    const { VSCodeStorageManager } = await import('./history/storage');
+    if (!extensionContext) {
+      throw new Error('Extension context not available');
+    }
+    const storageManager = new VSCodeStorageManager(extensionContext.globalState);
+    const agentSystem = new AgentSystem(apiClient, contextMgr);
+    const historyManager = new HistoryManager(storageManager);
     
     inlineChatProviderInstance = new InlineChatProviderClass(
       apiClient,
       contextMgr,
       agentSystem,
-      historyMgr,
-      intentRouter
+      historyManager
     );
   }
   
@@ -754,8 +860,7 @@ export function deactivate(): void {
     // 清理懒加载模块
     apiClientModule = null;
     contextManagerModule = null;
-    historyManagerModule = null;
-    agentSystemModule = null;
+    sessionManagerModule = null;
     inlineChatProviderModule = null;
     intentRouterModule = null;
     configManagerModule = null;
@@ -765,13 +870,14 @@ export function deactivate(): void {
     // 清理单例实例
     apiClientInstance = null;
     contextManagerInstance = null;
-    historyManagerInstance = null;
-    agentSystemInstance = null;
+    sessionManagerInstance = null;
     inlineChatProviderInstance = null;
     intentRouterInstance = null;
     configManagerInstance = null;
     completionProviderInstance = null;
     promptManagerInstance = null;
+    chatWebviewProvider = null;
+    selectionActionWidget = null;
     
     console.log('✓ HiCode AI Integration deactivated successfully');
   } catch (error) {

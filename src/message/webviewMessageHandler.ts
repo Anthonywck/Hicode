@@ -13,10 +13,58 @@
 import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
 import * as MessageType from '../utils/messageType';
-import { getConfigManager, getAPIClient, getHistoryManager, getContextManager, getChatWebviewProvider } from '../extension';
+import { getConfigManager, getAPIClient, getContextManager, getChatWebviewProvider, getExtensionContext } from '../extension';
 import { MessageHandler } from './messageHandler';
 import { generateUUID } from '../utils/tools';
 import { SettingsWebviewProvider } from '../providers/settingsWebviewProvider';
+import { getSessionFactory } from '../session/factory';
+import { Session } from '../session/sessionClass';
+import { MessageWithParts, ToolCallPart, TextPart } from '../session/message';
+
+/**
+ * 获取默认 API URL
+ */
+function getDefaultApiUrl(providerID: string): string {
+  const urls: Record<string, string> = {
+    openai: 'https://api.openai.com/v1',
+    zhipuai: 'https://open.bigmodel.cn/api/paas/v4',
+    deepseek: 'https://api.deepseek.com/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    google: 'https://generativelanguage.googleapis.com/v1',
+  };
+  return urls[providerID] || 'https://api.openai.com/v1';
+}
+
+/**
+ * 获取 SDK 包名
+ */
+function getSDKForProvider(providerID: string): string {
+  const sdkMap: Record<string, string> = {
+    openai: '@ai-sdk/openai',
+    zhipuai: '@ai-sdk/openai-compatible',
+    deepseek: '@ai-sdk/openai-compatible',
+    anthropic: '@ai-sdk/anthropic',
+    google: '@ai-sdk/google',
+  };
+  return sdkMap[providerID] || '@ai-sdk/openai-compatible';
+}
+
+/**
+ * 将前端使用的 providerID 映射到 models.dev 中的 providerID
+ * models.dev 可能使用不同的 ID（如 "zai" 而不是 "zhipuai"）
+ */
+function mapProviderIDToModelsDev(providerID: string): string {
+  const mapping: Record<string, string> = {
+    zhipuai: 'zai', // models.dev 中使用 "zai" 作为智谱AI的ID
+    deepseek: 'deepseek',
+    openai: 'openai',
+    anthropic: 'anthropic',
+    google: 'google',
+    qwen: 'qwen',
+    custom: 'custom',
+  };
+  return mapping[providerID] || providerID;
+}
 
 /**
  * 处理发送聊天消息请求
@@ -33,7 +81,7 @@ export async function handleAskQuestion(
     const { token, data } = message;
     // 兼容不同的字段名：content 或 message
     const content = data?.content || data?.message;
-    const { sessionId, chatId } = data || {};
+    const { sessionId, chatId, resources } = data || {};
 
     // 验证消息内容
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
@@ -49,17 +97,14 @@ export async function handleAskQuestion(
       return;
     }
 
-    // 获取 API 客户端、历史记录管理器和上下文管理器
+    // 获取 API 客户端和上下文管理器
     const apiClient = await getAPIClient();
-    const historyManager = await getHistoryManager();
     const contextManager = await getContextManager();
-    const configManager = await getConfigManager();
 
     // 创建消息处理器
     const messageHandler = new MessageHandler(
       apiClient,
       contextManager,
-      historyManager,
       {
         enableStreaming: true,
         includeContext: true
@@ -68,6 +113,8 @@ export async function handleAskQuestion(
 
     // 累积响应内容
     let accumulatedContent = '';
+    let currentSession: Session | null = null;
+    let lastMessageId: string | null = null;
 
     // 发送流式响应
     await messageHandler.handleSendStreamMessage(
@@ -77,20 +124,39 @@ export async function handleAskQuestion(
         onChunk: (chunk: string) => {
           // 确保chunk是有效的字符串，避免undefined
           const textChunk = chunk || '';
+          if (!textChunk) {
+            return; // 跳过空块
+          }
           accumulatedContent += textChunk;
-          // 发送流式数据到前端
+          
+          // 调试日志（仅在开发模式下）
+          if (process.env.NODE_ENV === 'development') {
+            logger.debug('发送流式数据块到前端', { 
+              chunkLength: textChunk.length, 
+              accumulatedLength: accumulatedContent.length,
+              chatId: chatId || sessionId,
+              preview: textChunk.substring(0, 50)
+            }, 'WebviewMessageHandler');
+          }
+          
+          // 立即发送流式数据到前端，实现真正的流式效果
           // 前端期望的格式：{ chatId, text }
           webview.postMessage({
             token: token || generateUUID(),
             message: MessageType.HICODE_ASK_QUESTION_B2F_RES,
             data: {
               chatId: chatId || sessionId,
-              text: textChunk  // 前端期望使用 text 字段，而不是 content
+              text: textChunk  // 前端期望使用 text 字段，每次只发送增量
             }
           });
         },
         // 流结束时的回调
-        onEnd: () => {
+        onEnd: async () => {
+          // 发送工具调用状态更新（如果有）
+          if (currentSession && lastMessageId) {
+            await sendToolCallUpdates(webview, currentSession, lastMessageId, chatId || sessionId, token);
+          }
+
           // 发送完成标志
           // 前端期望的格式：{ chatId, text: '[DONE]' }
           webview.postMessage({
@@ -119,7 +185,8 @@ export async function handleAskQuestion(
       {
         sessionId,
         stream: true,
-        includeContext: true
+        includeContext: true,
+        resources: resources || []  // 传递 resources 参数
       }
     );
   } catch (error) {
@@ -146,8 +213,9 @@ export async function handleNewChat(
   logger.debug('收到新建对话请求', { message }, 'WebviewMessageHandler');
 
   try {
-    const historyManager = await getHistoryManager();
     const apiClient = await getAPIClient();
+    const context = await getExtensionContext();
+    const sessionFactory = getSessionFactory(context);
 
     // 获取当前模型
     const currentModel = apiClient.getCurrentModel();
@@ -155,8 +223,8 @@ export async function handleNewChat(
       throw new Error('未选择模型，请先配置模型');
     }
 
-    // 创建新会话（这会自动更新currentSessionId）
-    const session = historyManager.createSession(currentModel);
+    // 创建新会话（使用新的 Session 系统）
+    const session = await sessionFactory.createSession(`对话 ${new Date().toLocaleString()}`);
 
     // 生成新的convId（用于前端标识）
     const newConvId = generateUUID();
@@ -167,12 +235,12 @@ export async function handleNewChat(
       message: MessageType.HICODE_NEW_CONVERSATION,
       data: {
         convId: newConvId,
-        sessionId: session.id,
+        sessionId: session.info.id,
         timestamp: new Date().toISOString()
       }
     });
 
-    logger.debug('新建对话成功', { sessionId: session.id, convId: newConvId }, 'WebviewMessageHandler');
+    logger.debug('新建对话成功', { sessionId: session.info.id, convId: newConvId }, 'WebviewMessageHandler');
   } catch (error) {
     logger.error('新建对话失败', error, 'WebviewMessageHandler');
     webview.postMessage({
@@ -182,6 +250,48 @@ export async function handleNewChat(
         error: error instanceof Error ? error.message : String(error)
       }
     });
+  }
+}
+
+/**
+ * 发送工具调用状态更新到前端
+ */
+async function sendToolCallUpdates(
+  webview: vscode.Webview,
+  session: Session,
+  messageId: string,
+  chatId: string,
+  token?: string
+): Promise<void> {
+  try {
+    const parts = await session.getParts(messageId);
+    
+    for (const part of parts) {
+      if (part.type === 'tool-call') {
+        const toolPart = part as ToolCallPart;
+        
+        // 发送工具调用状态更新
+        // 注意：hicode 的 ToolCallPart 结构较简单，只有 toolCallId, toolName, args, result, error
+        const status = toolPart.error ? 'error' : (toolPart.result !== undefined ? 'completed' : 'running');
+        webview.postMessage({
+          token: token || generateUUID(),
+          message: MessageType.HICODE_TOOL_CALL_UPDATE_B2F,
+          data: {
+            chatId,
+            toolCall: {
+              id: toolPart.toolCallId,
+              tool: toolPart.toolName,
+              status: status,
+              input: toolPart.args || {},
+              output: toolPart.result,
+              error: toolPart.error,
+            }
+          }
+        });
+      }
+    }
+  } catch (error) {
+    logger.error('发送工具调用更新失败', error, 'WebviewMessageHandler');
   }
 }
 
@@ -205,34 +315,54 @@ export async function handleGetModels(
     const configManager = await getConfigManager();
     const apiClient = await getAPIClient();
 
-    // 步骤2: 获取所有模型配置
+    // 步骤2: 获取所有用户配置的模型（只返回有API key的）
     const models = configManager.models.getModelConfigs();
     
-    // 步骤3: 为每个模型获取API密钥（从SecretStorage中读取）
+    // 步骤3: 为每个模型获取API密钥（从SecretStorage中读取），并过滤掉没有API key的模型
     const modelsWithKeys = await Promise.all(
       models.map(async (model: any) => {
         const apiKey = await configManager.models.getApiKey(model.modelId);
+        // 只返回有API key的模型（用户配置的）
+        if (!apiKey) {
+          return null;
+        }
         const modelWithKey = {
           ...model,
-          apiKey: apiKey || ''
+          apiKey: apiKey
         };
         // 将token单位转换为K单位显示给前端
         return processModelDataForDisplay(modelWithKey);
       })
     );
     
-    // 步骤4: 获取当前使用的模型（modelId）
-    const currentModelId = apiClient.getCurrentModel();
+    // 过滤掉 null 值（没有API key的模型）
+    const validModels = modelsWithKeys.filter((m): m is any => m !== null);
     
-    // 步骤5: 将modelId转换为modelName（前端期望的格式）
+    // 步骤4: 获取当前使用的模型（modelId）
+    let currentModelId = apiClient.getCurrentModel();
+    
+    // 步骤5: 如果没有当前模型，但有可用模型，自动选择第一个
+    if (!currentModelId && validModels.length > 0) {
+      const firstModel = validModels[0];
+      currentModelId = firstModel.modelId;
+      try {
+        // 通过 configManager 设置当前模型
+        await configManager.models.setCurrentModel(currentModelId);
+        logger.debug('自动选择第一个模型', { modelId: currentModelId }, 'WebviewMessageHandler');
+      } catch (error) {
+        logger.warn('自动选择模型失败', error, 'WebviewMessageHandler');
+      }
+    }
+    
+    // 步骤6: 将modelId转换为modelName（前端期望的格式）
     // 参考hicode项目，前端使用modelName作为currModel的值
     let currModel = '';
     if (currentModelId) {
       const currentModelConfig = models.find((m: any) => m.modelId === currentModelId);
       currModel = currentModelConfig?.modelName || currentModelId;
-    } else if (modelsWithKeys.length > 0) {
+    } else if (validModels.length > 0) {
       // 如果没有当前模型，使用第一个模型的modelName
-      currModel = modelsWithKeys[0].modelName || modelsWithKeys[0].modelId;
+      currModel = validModels[0].modelName || validModels[0].modelId;
     }
 
     // 步骤6: 发送响应，使用前端期望的字段名
@@ -241,19 +371,19 @@ export async function handleGetModels(
       token: message.token || generateUUID(),
       message: MessageType.HICODE_GET_MODELS_B2F_RES,
       data: {
-        modelOptions: modelsWithKeys, // 前端期望的字段名
-        models: modelsWithKeys, // 兼容字段
+        modelOptions: validModels, // 前端期望的字段名（只包含有API key的模型）
+        models: validModels, // 兼容字段
         currModel: currModel, // 前端期望的字段名（modelName格式）
         currentModel: currModel // 兼容字段
       }
     });
 
     logger.debug('获取模型列表成功', { 
-      count: modelsWithKeys.length, 
+      count: validModels.length, 
       currModel,
       currentModelId,
-      modelIds: modelsWithKeys.map((m: any) => m.modelId),
-      modelNames: modelsWithKeys.map((m: any) => m.modelName)
+      modelIds: validModels.map((m: any) => m.modelId),
+      modelNames: validModels.map((m: any) => m.modelName)
     }, 'WebviewMessageHandler');
   } catch (error) {
     logger.error('获取模型列表失败', error, 'WebviewMessageHandler');
@@ -417,12 +547,45 @@ function tokenToK(tokens: number | undefined): number | undefined {
 
 /**
  * 辅助函数：处理前端传来的模型数据，转换为后端存储格式
+ * - 处理新的数据结构（providerID、modelID）和旧的数据结构（vendor、modelName）
  * - 将K单位的 maxContextTokens 转换为token单位
  * - maxOutputTokens 不开放给用户配置，自动设置为默认值 2K (2048 tokens)
  * - 确保 temperature 有默认值 0.6
  */
-function processModelDataForStorage(data: any): any {
+async function processModelDataForStorage(data: any): Promise<any> {
   const processed = { ...data };
+  
+  // 处理新的数据结构：如果提供了 providerID 和 modelID，转换为旧格式以便存储
+  if (processed.providerID && processed.modelID) {
+    // 新格式：使用 providerID 和 modelID
+    // 转换为旧格式的 vendor 和 modelName（向后兼容）
+    if (!processed.vendor) {
+      processed.vendor = processed.providerID;
+    }
+    if (!processed.modelName) {
+      processed.modelName = processed.modelID;
+    }
+  } else if (processed.vendor && processed.modelName) {
+    // 旧格式：使用 vendor 和 modelName
+    // 转换为新格式（如果不存在）
+    if (!processed.providerID) {
+      processed.providerID = processed.vendor;
+    }
+    if (!processed.modelID) {
+      processed.modelID = processed.modelName;
+    }
+  }
+  
+  // 确保 modelId 格式正确（providerID/modelID 或使用旧的 modelId）
+  if (!processed.modelId) {
+    if (processed.providerID && processed.modelID) {
+      processed.modelId = `${processed.providerID}/${processed.modelID}`;
+    } else if (processed.modelName) {
+      processed.modelId = processed.modelName;
+    } else {
+      processed.modelId = generateUUID();
+    }
+  }
   
   // 将K单位转换为token单位
   if (processed.maxContextTokens !== undefined && processed.maxContextTokens !== null) {
@@ -443,7 +606,60 @@ function processModelDataForStorage(data: any): any {
     processed.temperature = 0.6;
   }
   
-  return processed;
+  // 构建完整的 ModelConfig 对象（新格式）
+  const modelConfig: any = {
+    modelId: processed.modelId,
+    displayName: processed.displayName || processed.modelID || processed.modelName || processed.modelId,
+    providerID: processed.providerID || processed.vendor || 'custom',
+    modelID: processed.modelID || processed.modelName || processed.modelId,
+    api: {
+      id: processed.modelID || processed.modelName || processed.modelId,
+      url: processed.apiBaseUrl || getDefaultApiUrl(processed.providerID || processed.vendor || 'custom'),
+      npm: getSDKForProvider(processed.providerID || processed.vendor || 'custom'),
+    },
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: false,
+      toolcall: true,
+      input: {
+        text: true,
+        audio: false,
+        image: processed.supportMultimodal || false,
+        video: false,
+        pdf: false,
+      },
+      output: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        pdf: false,
+      },
+    },
+    limit: {
+      context: processed.maxContextTokens || 4096,
+      output: processed.maxOutputTokens || 2048,
+    },
+    cost: {
+      input: 0,
+      output: 0,
+      cache: { read: 0, write: 0 },
+    },
+    status: 'active',
+    release_date: new Date().toISOString().split('T')[0],
+    modelDescription: processed.modelDescription,
+    apiKey: processed.apiKey,
+    // 向后兼容字段
+    vendor: processed.vendor || processed.providerID,
+    modelName: processed.modelName || processed.modelID,
+    apiBaseUrl: processed.apiBaseUrl,
+    maxContextTokens: processed.maxContextTokens,
+    maxOutputTokens: processed.maxOutputTokens,
+    supportMultimodal: processed.supportMultimodal || false,
+  };
+  
+  return modelConfig;
 }
 
 /**
@@ -488,7 +704,7 @@ export async function handleAddModel(
     }
 
     // 处理数据：将K单位转换为token单位，设置temperature默认值
-    const processedData = processModelDataForStorage(data);
+    const processedData = await processModelDataForStorage(data);
 
     // 添加模型配置
     await configManager.models.addModelConfig(processedData);
@@ -621,7 +837,7 @@ export async function handleEditModel(
     }
 
     // 处理数据：将K单位转换为token单位，设置temperature默认值
-    const processedData = processModelDataForStorage(data);
+    const processedData = await processModelDataForStorage(data);
 
     // 更新模型配置
     await configManager.models.updateModelConfig(data.modelId, processedData);
@@ -1154,10 +1370,22 @@ export async function handleGetHistory(
   logger.debug('收到获取历史记录请求', { message }, 'WebviewMessageHandler');
 
   try {
-    const historyManager = await getHistoryManager();
+    const context = await getExtensionContext();
+    const { getSessionManager } = await import('../session/session');
+    const sessionManager = getSessionManager(context);
 
-    // 获取所有会话
-    const sessions = historyManager.getAllSessions();
+    // 获取所有会话（使用新的 Session 系统）
+    const sessionsList = await sessionManager.getAllSessions();
+
+    // 转换为前端期望的格式
+    const sessions = sessionsList.map((session: Session) => ({
+      id: session.info.id,
+      title: session.info.title,
+      createdAt: new Date(session.info.created),
+      updatedAt: new Date(session.info.updated),
+      model: '', // 新系统中模型信息在消息中
+      messages: [] // 消息需要单独获取
+    }));
 
     // 发送响应
     webview.postMessage({
@@ -1829,6 +2057,189 @@ export async function handleDeleteSpecification(
   }
 }
 
+/**
+ * 处理获取 Provider 列表请求
+ * @param message 消息对象
+ * @param webview Webview 实例
+ */
+export async function handleGetProviders(
+  message: any,
+  webview: vscode.Webview
+): Promise<void> {
+  logger.debug('收到获取 Provider 列表请求', { message }, 'WebviewMessageHandler');
 
+  try {
+    const configManager = await getConfigManager();
+    
+    // 确保 ModelManager 已初始化
+    if (configManager.models && typeof (configManager.models as any).initialize === 'function') {
+      await (configManager.models as any).initialize();
+    }
 
+    // 从 ModelsDev 获取所有可用的 Provider（从 models.dev 获取）
+    const { ModelsDev } = await import('../config/modelsDev');
+    const { getExtensionContext } = await import('../extension');
+    const extensionContext = await getExtensionContext();
+    
+    // 获取所有 providers
+    const allProviders = await ModelsDev.get(extensionContext);
+    const availableProviderIDs = Object.keys(allProviders);
+    
+    logger.debug('从 models.dev 获取到的 Provider IDs', { 
+      availableProviderIDs,
+      count: availableProviderIDs.length
+    }, 'WebviewMessageHandler');
+    
+    // 转换为前端需要的格式，包含所有可用的 Provider
+    const providerList = availableProviderIDs.map((providerID: string) => {
+      const provider = allProviders[providerID];
+      return {
+        id: providerID,
+        name: provider.name || providerID,
+        source: 'api' as const,
+      };
+    });
+
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_GET_PROVIDERS_B2F_RES,
+      data: {
+        providers: providerList,
+      },
+    });
+
+    logger.debug('获取 Provider 列表成功', { count: providerList.length }, 'WebviewMessageHandler');
+  } catch (error) {
+    logger.error('获取 Provider 列表失败', error, 'WebviewMessageHandler');
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_ERROR_B2F,
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
+
+/**
+ * 处理获取 Provider 模型列表请求
+ * @param message 消息对象
+ * @param webview Webview 实例
+ */
+export async function handleGetProviderModels(
+  message: any,
+  webview: vscode.Webview
+): Promise<void> {
+  logger.debug('收到获取 Provider 模型列表请求', { message }, 'WebviewMessageHandler');
+
+  try {
+    const { data } = message;
+    const providerID = data?.providerID;
+
+    if (!providerID) {
+      throw new Error('Provider ID 不能为空');
+    }
+
+    const configManager = await getConfigManager();
+    
+    // 确保 ModelManager 已初始化（这会加载 models.dev 数据）
+    if (configManager.models && typeof (configManager.models as any).initialize === 'function') {
+      await (configManager.models as any).initialize();
+    }
+
+    // 从 ModelsDev 获取该提供商的模型列表（从 models.dev 获取）
+    const { ModelsDev } = await import('../config/modelsDev');
+    const { getExtensionContext } = await import('../extension');
+    const extensionContext = await getExtensionContext();
+    
+    // 映射 providerID 到 models.dev 中使用的 ID
+    const modelsDevProviderID = mapProviderIDToModelsDev(providerID);
+    logger.debug('获取模型列表', { 
+      frontendProviderID: providerID, 
+      modelsDevProviderID: modelsDevProviderID 
+    }, 'WebviewMessageHandler');
+    
+    // 获取所有 providers（类似 opencode 的做法）
+    const allProviders = await ModelsDev.get(extensionContext);
+    const availableProviderIDs = Object.keys(allProviders);
+    logger.debug('可用的 Provider IDs', { 
+      availableProviderIDs,
+      requestedProviderID: modelsDevProviderID,
+      isAvailable: availableProviderIDs.includes(modelsDevProviderID)
+    }, 'WebviewMessageHandler');
+    
+    // 直接从 allProviders 中获取指定 provider 的模型列表（类似 opencode 的 database[providerID]）
+    const provider = allProviders[modelsDevProviderID];
+    if (!provider) {
+      logger.warn(`Provider ${modelsDevProviderID} not found in models.dev`, {
+        availableProviders: availableProviderIDs,
+        requestedProvider: modelsDevProviderID
+      }, 'WebviewMessageHandler');
+      
+      // 返回空列表
+      webview.postMessage({
+        token: message.token || generateUUID(),
+        message: MessageType.HICODE_GET_PROVIDER_MODELS_B2F_RES,
+        data: {
+          providerID,
+          models: [],
+        },
+      });
+      return;
+    }
+    
+    // 获取该 provider 的所有模型
+    const models = Object.values(provider.models || {});
+    logger.debug('获取到的模型列表', { 
+      providerID: modelsDevProviderID, 
+      providerName: provider.name,
+      modelCount: models.length,
+      modelIds: models.map(m => m.id)
+    }, 'WebviewMessageHandler');
+    
+    // 转换为前端需要的格式
+    const modelList = models.map((model: any) => ({
+      id: model.id,
+      name: model.name,
+      capabilities: {
+        temperature: model.temperature || false,
+        reasoning: model.reasoning || false,
+        multimodal:
+          model.modalities?.input?.includes('image') ||
+          model.modalities?.input?.includes('video') ||
+          model.modalities?.input?.includes('audio') ||
+          false,
+      },
+      limits: {
+        context: model.limit?.context || 0,
+        output: model.limit?.output || 0,
+      },
+    }));
+
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_GET_PROVIDER_MODELS_B2F_RES,
+      data: {
+        providerID,
+        models: modelList,
+      },
+    });
+
+    logger.debug('获取 Provider 模型列表成功', { 
+      providerID, 
+      modelsDevProviderID,
+      count: modelList.length,
+      modelNames: modelList.map(m => m.name)
+    }, 'WebviewMessageHandler');
+  } catch (error) {
+    logger.error('获取 Provider 模型列表失败', error, 'WebviewMessageHandler');
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_ERROR_B2F,
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
 

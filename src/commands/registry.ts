@@ -129,6 +129,29 @@ export const commandConfigs: CommandConfig[] = [
     category: 'HiCode',
     description: '撤销上一次 Agent 执行的操作',
     handler: handlers.undoAgentActionHandler
+  },
+  {
+    command: 'hicode.addSelectionToChat',
+    title: 'Add Selection to Chat',
+    category: 'HiCode',
+    description: '将选中的代码添加到聊天',
+    handler: handlers.addSelectionToChatHandler,
+    when: 'editorHasSelection'
+  },
+  {
+    command: 'hicode.quickEdit',
+    title: 'Quick Edit',
+    category: 'HiCode',
+    description: '快速编辑选中的代码',
+    handler: handlers.quickEditHandler,
+    when: 'editorHasSelection'
+  },
+  {
+    command: 'hicode.testSelectionButtons',
+    title: 'Test Selection Buttons',
+    category: 'HiCode',
+    description: '测试选择按钮显示（调试用）',
+    handler: handlers.testSelectionButtonsHandler
   }
 ];
 

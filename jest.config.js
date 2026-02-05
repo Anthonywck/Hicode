@@ -44,6 +44,11 @@ module.exports = {
   // Setup files
   setupFilesAfterEnv: [],
   
+  // Module name mapper for mocking
+  moduleNameMapper: {
+    '^vscode$': '<rootDir>/src/__mocks__/vscode.ts',
+  },
+  
   // Ignore patterns
   testPathIgnorePatterns: [
     '/node_modules/',

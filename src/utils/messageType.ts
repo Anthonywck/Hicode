@@ -63,6 +63,18 @@ export const HICODE_DELETE_MODEL_F2B_REQ = 'hicode_delete_model_f2b_req';
 /** 后端响应：刷新模型列表（新增/编辑/删除后） */
 export const HICODE_REFRESH_MODELS_B2F_RES = 'hicode_refresh_models_b2f_res';
 
+/** 前端请求：获取 Provider 列表 */
+export const HICODE_GET_PROVIDERS_F2B_REQ = 'hicode_get_providers_f2b_req';
+
+/** 后端响应：获取 Provider 列表响应 */
+export const HICODE_GET_PROVIDERS_B2F_RES = 'hicode_get_providers_b2f_res';
+
+/** 前端请求：获取指定 Provider 的模型列表 */
+export const HICODE_GET_PROVIDER_MODELS_F2B_REQ = 'hicode_get_provider_models_f2b_req';
+
+/** 后端响应：获取 Provider 模型列表响应 */
+export const HICODE_GET_PROVIDER_MODELS_B2F_RES = 'hicode_get_provider_models_b2f_res';
+
 // ========== 设置相关消息 ==========
 
 /** 前端请求：获取设置 */
@@ -129,7 +141,15 @@ export const HICODE_SELECTION_CHANGE = 'hicode_selection_change';
 /** 前端请求：清除代码选择（前端到插件端） */
 export const HICODE_CLEAR_SELECTION = 'hicode_clear_selection';
 
+/** 后端通知：添加选中代码到资源列表（插件端到前端） */
+export const HICODE_ADD_SELECTION_TO_RESOURCES_B2F = 'hicode_add_selection_to_resources_b2f';
+
 // ========== 代码操作相关消息 ==========
 
 /** 前端请求：插入代码到编辑器（前端到插件端） */
 export const HICODE_INSERT_CODE_F2B_REQ = 'hicode_insert_code_f2b_req';
+
+// ========== 工具调用相关消息 ==========
+
+/** 后端通知：工具调用状态更新（插件端到前端） */
+export const HICODE_TOOL_CALL_UPDATE_B2F = 'hicode_tool_call_update_b2f';

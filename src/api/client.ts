@@ -1,306 +1,203 @@
 /**
  * API Client Manager
  * 管理所有模型的API调用，提供统一的接口
+ * 使用 AI SDK 统一接口
  */
-
 import {
   IAPIClient,
-  ModelAdapter,
   ModelConfig,
+  ProviderInfo,
   ChatRequest,
   ChatResponse,
   CodeContext,
-  CompletionSuggestion
+  CompletionSuggestion,
 } from './types';
+import { ProviderManager } from './provider/providerManager';
+import { ProviderTransform } from './provider/transform';
+import type { IModelManager } from '../config/modelManager';
+import type { ModelMessage } from 'ai';
 
 /**
  * API客户端管理器
- * 负责管理多个模型适配器，提供统一的API调用接口
+ * 负责管理多个模型，提供统一的API调用接口
  */
 export class APIClientManager implements IAPIClient {
-  /** 已注册的适配器映射 */
-  private adapters: Map<string, ModelAdapter> = new Map();
-  
-  /** 当前使用的模型ID */
-  private currentModel: string | null = null;
+  private providerManager: ProviderManager;
+  private modelManager: IModelManager;
 
-  /** 模型管理器实例（用于同步当前模型配置） */
-  private modelManager: any = null;
-
-  /** Prompt 管理器实例（用于模板系统） */
-  private promptManager: any = null;
-
-  /**
-   * 注册模型适配器
-   * @param vendor 模型提供商标识
-   * @param adapter 适配器实例
-   */
-  registerAdapter(vendor: string, adapter: ModelAdapter): void {
-    if (this.adapters.has(vendor)) {
-      throw new Error(`Adapter for vendor "${vendor}" is already registered`);
-    }
-    this.adapters.set(vendor, adapter);
-  }
-
-  /**
-   * 设置 Prompt 管理器
-   * @param promptManager Prompt 管理器实例
-   */
-  setPromptManager(promptManager: any): void {
-    this.promptManager = promptManager;
-  }
-
-  /**
-   * 构造函数
-   * @param modelManager 模型管理器实例（可选），用于同步当前模型配置
-   * @param promptManager Prompt 管理器实例（可选），用于模板系统
-   */
-  constructor(modelManager?: any, promptManager?: any) {
+  constructor(modelManager: IModelManager) {
     this.modelManager = modelManager;
-    this.promptManager = promptManager;
-    // 如果提供了模型管理器，从配置中加载当前模型
-    if (this.modelManager) {
-      const currentModelId = this.modelManager.getCurrentModel();
-      if (currentModelId) {
-        this.currentModel = currentModelId;
+    this.providerManager = ProviderManager.getInstance();
+  }
+
+  /**
+   * 解析模型ID
+   * 支持格式: "providerID/modelID" 或 "modelId"（向后兼容）
+   */
+  private parseModelId(modelId: string): [string, string] {
+    if (!modelId) {
+      throw new Error('Model ID cannot be empty');
+    }
+
+    // 支持格式: "providerID/modelID"
+    if (modelId.includes('/')) {
+      const [providerID, ...rest] = modelId.split('/');
+      if (!providerID || !rest.length) {
+        throw new Error(`Invalid model ID format: ${modelId}. Expected format: "providerID/modelID"`);
+      }
+      return [providerID, rest.join('/')];
+    }
+
+    // 向后兼容：尝试从模型配置中查找
+    const configs = this.modelManager.getModelConfigs();
+    const model = configs.find((m) => m.modelId === modelId || m.modelID === modelId || m.modelName === modelId);
+    if (model) {
+      // 如果找到了模型配置，确保有 providerID 和 modelID
+      if (model.providerID && model.modelID) {
+        return [model.providerID, model.modelID];
+      }
+      // 如果只有 providerID，尝试从 modelName 或 modelId 推断 modelID
+      if (model.providerID) {
+        const inferredModelID = model.modelID || model.modelName || (model.modelId && !model.modelId.includes('-') ? model.modelId : 'unknown');
+        return [model.providerID, inferredModelID];
       }
     }
-  }
 
-  /**
-   * 切换当前模型（内部方法，不更新配置）
-   * @param modelId 模型ID
-   * @throws 如果模型不存在则抛出错误
-   */
-  switchModel(modelId: string): void {
-    if (!this.adapters.has(modelId)) {
-      throw new Error(`Model "${modelId}" is not registered`);
-    }
-    this.currentModel = modelId;
-  }
-
-  /**
-   * 设置当前模型（公开方法，同步更新配置管理器）
-   * 这是推荐使用的方法，它会同时更新API客户端和配置管理器中的当前模型
-   * 
-   * @param modelId 模型ID
-   * @throws 如果模型不存在则抛出错误
-   */
-  async setCurrentModel(modelId: string): Promise<void> {
-    // 验证模型是否存在（通过模型管理器验证）
-    if (this.modelManager) {
-      const models = this.modelManager.getModelConfigs();
-      const modelExists = models.some((m: ModelConfig) => m.modelId === modelId);
-      if (!modelExists) {
-        throw new Error(`Model "${modelId}" not found in configuration`);
-      }
-      
-      // 同步更新配置管理器中的当前模型
-      await this.modelManager.setCurrentModel(modelId);
-    }
-    
-    // 更新API客户端中的当前模型
-    this.currentModel = modelId;
-  }
-
-  /**
-   * 获取当前模型ID
-   * 优先从配置管理器中读取，确保与配置保持一致
-   * @returns 当前模型ID
-   */
-  getCurrentModel(): string | null {
-    // 如果提供了模型管理器，优先从配置中读取当前模型
-    // 这样可以确保API客户端中的当前模型与配置管理器保持一致
-    if (this.modelManager) {
-      const configModelId = this.modelManager.getCurrentModel();
-      if (configModelId) {
-        // 同步更新内部状态
-        this.currentModel = configModelId;
-        return configModelId;
-      }
-    }
-    
-    // 如果没有配置管理器或配置中没有当前模型，返回内部状态
-    return this.currentModel;
-  }
-
-  /**
-   * 获取当前适配器
-   * @returns 当前适配器实例
-   * @throws 如果没有设置当前模型则抛出错误
-   */
-  private async getCurrentAdapter(): Promise<ModelAdapter> {
-    if (!this.currentModel) {
-      throw new Error('No model is currently selected');
-    }
-    
-    // 首先尝试直接通过modelId获取adapter（向后兼容）
-    let adapter = this.adapters.get(this.currentModel);
-    
-    // 如果没找到，尝试通过vendor获取或创建
-    if (!adapter && this.modelManager) {
-      const models = this.modelManager.getModelConfigs();
-      const modelConfig = models.find((m: ModelConfig) => m.modelId === this.currentModel);
-      
-      if (modelConfig && modelConfig.vendor) {
-        // 尝试获取已注册的vendor adapter
-        adapter = this.adapters.get(modelConfig.vendor);
-        
-        // 如果vendor adapter不存在，动态创建一个
-        if (!adapter) {
-          adapter = await this.createAdapter(modelConfig);
-          if (adapter) {
-            this.adapters.set(modelConfig.vendor, adapter);
-          }
+    // 如果找不到，尝试使用当前模型
+    const currentModelId = this.modelManager.getCurrentModel();
+    if (currentModelId && currentModelId !== modelId) {
+      const currentModel = configs.find((m) => m.modelId === currentModelId);
+      if (currentModel) {
+        if (currentModel.providerID && currentModel.modelID) {
+          return [currentModel.providerID, currentModel.modelID];
+        }
+        if (currentModel.providerID) {
+          const inferredModelID = currentModel.modelID || currentModel.modelName || (currentModel.modelId && !currentModel.modelId.includes('-') ? currentModel.modelId : 'unknown');
+          return [currentModel.providerID, inferredModelID];
         }
       }
     }
-    
-    if (!adapter) {
-      throw new Error(`Adapter for model "${this.currentModel}" not found`);
-    }
-    
-    return adapter;
-  }
-  
-  /**
-   * 动态创建adapter
-   * @param modelConfig 模型配置
-   * @returns adapter实例
-   */
-  private async createAdapter(modelConfig: ModelConfig): Promise<ModelAdapter | undefined> {
-    console.log(`[createAdapter] Starting for model:`, {
-      modelId: modelConfig.modelId,
-      modelName: modelConfig.modelName,
-      vendor: modelConfig.vendor
-    });
-    
-    // 获取API密钥
-    const apiKey = await this.modelManager.getApiKey(modelConfig.modelId);
-    
-    console.log(`[createAdapter] API key retrieved:`, {
-      modelId: modelConfig.modelId,
-      hasApiKey: !!apiKey,
-      apiKeyLength: apiKey?.length || 0,
-      apiKeyPrefix: apiKey ? apiKey.substring(0, 10) + '...' : 'none'
-    });
-    
-    if (!apiKey) {
-      console.error(`[createAdapter] No API key found for model ${modelConfig.modelId} (${modelConfig.modelName})`);
-      // 仍然创建adapter，但会导致401错误
-    }
-    
-    const configWithKey = { ...modelConfig, apiKey: apiKey || '' };
-    
-    console.log(`[createAdapter] Creating adapter for vendor: ${modelConfig.vendor}`, {
-      hasPromptManager: !!this.promptManager
-    });
-    
-    try {
-      switch (modelConfig.vendor) {
-        case 'deepseek': {
-          const { DeepSeekAdapter } = await import('./adapters/deepseek');
-          return new DeepSeekAdapter(configWithKey, this.promptManager);
-        }
-        case 'openai': {
-          const { OpenAIAdapter } = await import('./adapters/openai');
-          return new OpenAIAdapter(configWithKey, this.promptManager);
-        }
-        case 'zhipuai': {
-          const { ZhipuAIAdapter } = await import('./adapters/zhipuai');
-          return new ZhipuAIAdapter(configWithKey, this.promptManager);
-        }
-        default: {
-          // 对于未知的vendor，使用OpenAI兼容的adapter
-          const { OpenAIAdapter } = await import('./adapters/openai');
-          return new OpenAIAdapter(configWithKey, this.promptManager);
-        }
-      }
-    } catch (error) {
-      console.error(`[createAdapter] Failed to create adapter for vendor ${modelConfig.vendor}:`, error);
-      return undefined;
-    }
+
+    throw new Error(`Cannot parse model ID: ${modelId}. Expected format: "providerID/modelID" or a valid model ID from configuration.`);
   }
 
   /**
-   * 获取指定模型的适配器
-   * @param modelId 模型ID
-   * @returns 适配器实例
-   * @throws 如果适配器不存在则抛出错误
+   * 转换消息格式
    */
-  private async getAdapter(modelId: string): Promise<ModelAdapter> {
-    // 首先尝试直接通过modelId获取adapter（向后兼容）
-    let adapter = this.adapters.get(modelId);
-    
-    // 如果没找到，尝试通过vendor获取或创建
-    if (!adapter && this.modelManager) {
-      const models = this.modelManager.getModelConfigs();
-      const modelConfig = models.find((m: ModelConfig) => m.modelId === modelId);
-      
-      if (modelConfig && modelConfig.vendor) {
-        // 每次都重新创建adapter，确保使用最新的API密钥
-        // 不使用缓存，因为API密钥可能已更新
-        adapter = await this.createAdapter(modelConfig);
-        
-        if (adapter) {
-          // 更新缓存
-          this.adapters.set(modelConfig.vendor, adapter);
-          this.adapters.set(modelId, adapter); // 同时按modelId缓存
+  private convertMessages(messages: ChatRequest['messages'] | ModelMessage[]): Array<{
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+  }> {
+    return messages
+      .filter((msg) => {
+        // 过滤掉 tool 角色的消息（generateText 不支持 tool 角色）
+        return msg.role !== 'tool';
+      })
+      .map((msg) => {
+        // 处理 ModelMessage 类型（可能包含复杂 content）
+        if (typeof msg.content === 'string') {
+          return {
+            role: msg.role as 'system' | 'user' | 'assistant',
+            content: msg.content,
+          };
         }
-      }
-    }
-    
-    if (!adapter) {
-      throw new Error(`Adapter for model "${modelId}" not found`);
-    }
-    
-    return adapter;
+        // 如果是数组形式的 content，转换为字符串
+        if (Array.isArray(msg.content)) {
+          const textParts = msg.content
+            .filter((part: any) => part.type === 'text')
+            .map((part: any) => part.text)
+            .join('');
+          return {
+            role: msg.role as 'system' | 'user' | 'assistant',
+            content: textParts,
+          };
+        }
+        // 默认情况
+        return {
+          role: msg.role as 'system' | 'user' | 'assistant',
+          content: String(msg.content),
+        };
+      });
   }
 
   /**
-   * 根据modelId获取modelName
-   * @param modelId 模型ID
-   * @returns 模型名称，如果找不到则返回modelId
+   * 映射结束原因
    */
-  private getModelName(modelId: string): string {
-    if (this.modelManager) {
-      const models = this.modelManager.getModelConfigs();
-      const modelConfig = models.find((m: ModelConfig) => m.modelId === modelId);
-      if (modelConfig) {
-        return modelConfig.modelName;
-      }
+  private mapFinishReason(reason: string): 'stop' | 'length' | 'error' {
+    switch (reason) {
+      case 'stop':
+        return 'stop';
+      case 'length':
+      case 'length_limit':
+      case 'max_tokens':
+        return 'length';
+      default:
+        return 'error';
     }
-    // 如果找不到配置，返回原始modelId（向后兼容）
-    return modelId;
-  }
-
-  /**
-   * 准备ChatRequest，将modelId转换为modelName
-   * @param request 原始请求
-   * @returns 处理后的请求
-   */
-  private prepareChatRequest(request: ChatRequest): ChatRequest {
-    // 将modelId转换为modelName
-    const modelName = this.getModelName(request.model);
-    return {
-      ...request,
-      model: modelName
-    };
   }
 
   /**
    * 发送聊天请求
-   * @param request 聊天请求参数（model字段可以是modelId）
-   * @returns 聊天响应
    */
   async sendChatRequest(request: ChatRequest): Promise<ChatResponse> {
     try {
-      // 保存原始modelId用于查找适配器
-      const modelId = request.model;
-      const adapter = await this.getAdapter(modelId);
-      // 将request中的model转换为modelName
-      const preparedRequest = this.prepareChatRequest(request);
-      return await adapter.chat(preparedRequest);
+      // 如果没有指定模型，使用当前模型
+      let modelId = request.model;
+      if (!modelId) {
+        modelId = this.modelManager.getCurrentModel();
+        if (!modelId) {
+          throw new Error('No model is currently selected. Please select a model first.');
+        }
+      }
+      
+      // 解析模型ID
+      const [providerID, modelID] = this.parseModelId(modelId);
+
+      // 获取模型和提供商配置
+      const model = await this.modelManager.getModel(providerID, modelID);
+      const provider = await this.modelManager.getProvider(providerID);
+
+      // 获取语言模型实例
+      const languageModel = await this.providerManager.getLanguageModel(model, provider);
+
+      // 转换消息格式
+      const messages = this.convertMessages(request.messages);
+
+      // 应用消息转换
+      const transformedMessages = ProviderTransform.message(
+        request.messages,
+        model,
+        {}
+      );
+
+      // 获取 Provider 特定选项
+      const providerOptions = ProviderTransform.options({
+        model,
+        sessionID: '', // TODO: 从请求中获取
+        providerOptions: {},
+      });
+
+      // 动态导入 AI SDK
+      const { generateText } = await import('ai');
+      
+      // 调用 AI SDK
+      const result = await generateText({
+        model: languageModel,
+        messages: this.convertMessages(transformedMessages),
+        temperature: request.temperature ?? ProviderTransform.temperature(model) ?? 0.6,
+        maxTokens: request.maxTokens ?? model.limit.output,
+        ...providerOptions,
+      } as any); // 使用 any 类型以兼容不同版本的 AI SDK
+
+      return {
+        content: result.text,
+        finishReason: this.mapFinishReason(result.finishReason),
+        usage: {
+          promptTokens: (result.usage as any)?.promptTokens ?? (result.usage as any)?.inputTokens ?? 0,
+          completionTokens: (result.usage as any)?.completionTokens ?? (result.usage as any)?.outputTokens ?? 0,
+          totalTokens: (result.usage as any)?.totalTokens ?? 0,
+        },
+      };
     } catch (error) {
       throw new Error(
         `Failed to send chat request: ${error instanceof Error ? error.message : String(error)}`
@@ -310,10 +207,6 @@ export class APIClientManager implements IAPIClient {
 
   /**
    * 发送流式聊天请求
-   * @param request 聊天请求参数（model字段可以是modelId）
-   * @param onChunk 接收到数据块时的回调
-   * @param onEnd 流结束时的回调
-   * @param onError 发生错误时的回调
    */
   async sendStreamChatRequest(
     request: ChatRequest,
@@ -322,32 +215,176 @@ export class APIClientManager implements IAPIClient {
     onError: (error: Error) => void
   ): Promise<void> {
     try {
-      // 保存原始modelId用于查找适配器
-      const modelId = request.model;
-      console.log(`[APIClient] sendStreamChatRequest called with modelId: ${modelId}`);
-      const adapter = await this.getAdapter(modelId);
-      console.log(`[APIClient] Adapter obtained:`, {
-        adapterType: adapter.constructor.name,
-        hasChatStream: typeof adapter.chatStream === 'function'
+      // 如果没有指定模型，使用当前模型
+      let modelId = request.model;
+      if (!modelId) {
+        modelId = this.modelManager.getCurrentModel();
+        if (!modelId) {
+          onError(new Error('No model is currently selected. Please select a model first.'));
+          return;
+        }
+      }
+      
+      // 解析模型ID
+      const [providerID, modelID] = this.parseModelId(modelId);
+
+      // 获取模型和提供商配置
+      const model = await this.modelManager.getModel(providerID, modelID);
+      const provider = await this.modelManager.getProvider(providerID);
+
+      // 获取语言模型实例
+      const languageModel = await this.providerManager.getLanguageModel(model, provider);
+
+      // 应用消息转换
+      const transformedMessages = ProviderTransform.message(
+        request.messages,
+        model,
+        {}
+      );
+
+      // 获取 Provider 特定选项
+      const providerOptions = ProviderTransform.options({
+        model,
+        sessionID: '', // TODO: 从请求中获取
+        providerOptions: {},
       });
-      // 将request中的model转换为modelName
-      const preparedRequest = this.prepareChatRequest(request);
-      console.log(`[APIClient] Calling adapter.chatStream...`);
-      await adapter.chatStream(preparedRequest, onChunk, onEnd, onError);
+
+      // 动态导入 AI SDK
+      const ai = await import('ai');
+      const { streamText } = ai;
+      
+      // 调用 AI SDK 流式接口
+      // 参考 opencode 的实现，使用 fullStream 并处理所有 chunk 类型
+      // 关键：即使不使用工具，也要传递空的 tools 对象，避免 AI SDK 内部处理错误
+      // 注意：AI SDK 6.0 使用 maxOutputTokens 而不是 maxTokens
+      const streamOptions: any = {
+        model: languageModel,
+        messages: this.convertMessages(transformedMessages),
+        temperature: request.temperature ?? ProviderTransform.temperature(model) ?? 0.6,
+        maxOutputTokens: request.maxTokens ?? model.limit.output, // AI SDK 6.0 使用 maxOutputTokens
+        // 传递空的 tools 对象，参考 opencode 的实现
+        tools: {},
+        activeTools: [],
+        // 禁用工具调用
+        maxToolRoundtrips: 0,
+        experimental_toolCallStreaming: false,
+        // 禁用遥测功能，避免 OpenTelemetry 错误
+        experimental_telemetry: {
+          isEnabled: false,
+        },
+        ...providerOptions,
+      };
+      
+      // 不删除 tools，保持空对象（opencode 的做法）
+      
+      try {
+        // 添加 onError 回调来处理流错误，参考 opencode 的实现
+        streamOptions.onError = (error: any) => {
+          console.error('[APIClient] Stream error in onError callback:', error);
+          // 不在这里抛出错误，让 fullStream 处理
+        };
+        
+        const result = await streamText(streamOptions);
+
+        // 使用 fullStream 处理所有 chunk 类型，参考 opencode 的实现
+        // 使用 any 类型以处理所有可能的 chunk 类型
+        let currentText = '';
+        try {
+          for await (const chunk of result.fullStream) {
+          const chunkType = (chunk as any).type;
+          
+          switch (chunkType) {
+            case 'start':
+            case 'stream-start':
+              // 流开始，不做处理
+              break;
+            
+            case 'text-start':
+              // 文本开始，重置当前文本
+              currentText = '';
+              break;
+            
+            case 'text-delta':
+              // 文本增量，累积并发送
+              // AI SDK 6.0 使用 text 属性而不是 textDelta
+              const textDelta = (chunk as any).text || (chunk as any).textDelta;
+              if (textDelta) {
+                currentText += textDelta;
+                console.log('[APIClient] Sending text-delta chunk:', { length: textDelta.length, preview: textDelta.substring(0, 50) });
+                onChunk(textDelta);
+              } else {
+                console.warn('[APIClient] text-delta chunk has no text or textDelta property', { chunk });
+              }
+              break;
+            
+            case 'text-end':
+              // 文本结束，不做处理（已经在 text-delta 中发送）
+              break;
+            
+            case 'finish':
+            case 'finish-step':
+            case 'step-finish':
+              // 流结束
+              break;
+            
+            case 'error':
+              // 错误，抛出
+              throw (chunk as any).error;
+            
+            // 忽略其他类型的 chunk（如 tool-call, tool-result, reasoning-* 等）
+            case 'reasoning-start':
+            case 'reasoning-delta':
+            case 'reasoning-end':
+            case 'tool-call':
+            case 'tool-call-streaming-start':
+            case 'tool-call-delta':
+            case 'tool-result':
+            case 'tool-error':
+            case 'tool-input-start':
+            case 'tool-input-delta':
+            case 'tool-input-end':
+            case 'start-step':
+              // 这些类型我们不处理，但也不抛出错误
+              break;
+            
+            default:
+              // 对于未知的 chunk 类型，记录日志但不抛出错误（参考 opencode 的实现）
+              console.log('[APIClient] Unhandled chunk type:', chunkType);
+              break;
+          }
+        }
+        } catch (streamError: any) {
+          // 如果 fullStream 失败（可能是 stream-start 错误），尝试使用 textStream
+          if (streamError.message?.includes('stream-start') || streamError.message?.includes('Unhandled chunk type')) {
+            console.warn('[APIClient] fullStream failed with stream-start error, trying textStream');
+            try {
+              // 尝试使用 textStream 作为回退
+              for await (const chunk of result.textStream) {
+                onChunk(chunk);
+              }
+            } catch (textStreamError: any) {
+              // 如果 textStream 也失败，抛出错误
+              throw textStreamError;
+            }
+          } else {
+            throw streamError;
+          }
+        }
+        
+        onEnd();
+      } catch (error) {
+        console.error('[APIClient] Stream processing failed:', error);
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
     } catch (error) {
-      const errorObj = error instanceof Error 
-        ? error 
-        : new Error(String(error));
+      const errorObj =
+        error instanceof Error ? error : new Error(String(error));
       onError(errorObj);
     }
   }
 
   /**
    * 发送补全请求
-   * @param context 代码上下文
-   * @param prefix 光标前的代码
-   * @param suffix 光标后的代码
-   * @returns 补全建议列表
    */
   async sendCompletionRequest(
     context: CodeContext,
@@ -355,8 +392,44 @@ export class APIClientManager implements IAPIClient {
     suffix: string
   ): Promise<CompletionSuggestion[]> {
     try {
-      const adapter = await this.getCurrentAdapter();
-      return await adapter.complete(context, prefix, suffix);
+      // 获取当前模型
+      const currentModelId = this.modelManager.getCurrentModel();
+      if (!currentModelId) {
+        throw new Error('No model is currently selected');
+      }
+
+      const [providerID, modelID] = this.parseModelId(currentModelId);
+      const model = await this.modelManager.getModel(providerID, modelID);
+      const provider = await this.modelManager.getProvider(providerID);
+      const languageModel = await this.providerManager.getLanguageModel(model, provider);
+
+      // 构建补全提示词
+      const prompt = this.buildCompletionPrompt(context, prefix, suffix);
+
+      const messages = [
+        {
+          role: 'system' as const,
+          content: 'You are a code completion assistant. Provide concise code completions based on context. Return only the completion code without explanations.',
+        },
+        {
+          role: 'user' as const,
+          content: prompt,
+        },
+      ];
+
+      // 动态导入 AI SDK
+      const ai = await import('ai');
+      const { generateText } = ai;
+      
+      const result = await generateText({
+        model: languageModel,
+        messages,
+        temperature: 0.2, // 较低的温度以获得更确定的补全
+        maxTokens: 150,
+      } as any); // 使用 any 类型以兼容不同版本的 AI SDK
+
+      // 解析补全建议
+      return this.parseCompletionResponse(result.text);
     } catch (error) {
       throw new Error(
         `Failed to send completion request: ${error instanceof Error ? error.message : String(error)}`
@@ -365,31 +438,39 @@ export class APIClientManager implements IAPIClient {
   }
 
   /**
+   * 获取当前模型ID
+   */
+  getCurrentModel(): string {
+    return this.modelManager.getCurrentModel();
+  }
+
+  /**
    * 验证API配置
-   * @param config 模型配置
-   * @returns 配置是否有效
    */
   async validateConfig(config: ModelConfig): Promise<boolean> {
     try {
       // 检查必需字段
-      if (!config.modelId || !config.apiKey || !config.apiBaseUrl) {
+      if (!config.modelId || !config.providerID || !config.modelID) {
         return false;
       }
 
-      // 检查URL格式
-      try {
-        new URL(config.apiBaseUrl);
-      } catch {
+      // 检查 API 配置
+      if (!config.api || !config.api.url || !config.api.npm) {
         return false;
       }
 
-      // 如果适配器已注册，使用适配器验证
-      const adapter = this.adapters.get(config.vendor);
-      if (adapter) {
-        return await adapter.validateConfig(config);
+      // 尝试获取 Provider（验证配置是否有效）
+      const provider = await this.modelManager.getProvider(config.providerID);
+      if (!provider) {
+        return false;
       }
 
-      // 基本验证通过
+      // 尝试获取模型（验证模型是否存在）
+      const model = await this.modelManager.getModel(config.providerID, config.modelID);
+      if (!model) {
+        return false;
+      }
+
       return true;
     } catch (error) {
       return false;
@@ -397,39 +478,58 @@ export class APIClientManager implements IAPIClient {
   }
 
   /**
-   * 获取所有已注册的适配器
-   * @returns 适配器ID列表
+   * 构建补全提示词
    */
-  getRegisteredAdapters(): string[] {
-    return Array.from(this.adapters.keys());
-  }
+  private buildCompletionPrompt(
+    context: CodeContext,
+    prefix: string,
+    suffix: string
+  ): string {
+    let prompt = `File type: ${context.currentFile.language}\n\n`;
 
-  /**
-   * 检查适配器是否已注册
-   * @param vendor 模型提供商标识
-   * @returns 是否已注册
-   */
-  hasAdapter(vendor: string): boolean {
-    return this.adapters.has(vendor);
-  }
-
-  /**
-   * 移除适配器
-   * @param vendor 模型提供商标识
-   * @returns 是否成功移除
-   */
-  removeAdapter(vendor: string): boolean {
-    if (this.currentModel === vendor) {
-      this.currentModel = null;
+    // 添加相关导入和定义
+    if (context.relatedFiles && context.relatedFiles.length > 0) {
+      prompt += 'Related context:\n';
+      context.relatedFiles.forEach((file) => {
+        prompt += `${file.excerpt}\n`;
+      });
+      prompt += '\n';
     }
-    return this.adapters.delete(vendor);
+
+    prompt += 'Please provide code completion for:\n\n';
+    prompt += '```' + context.currentFile.language + '\n';
+    prompt += prefix;
+    prompt += '<CURSOR>';
+    if (suffix) {
+      prompt += '\n' + suffix;
+    }
+    prompt += '\n```\n\n';
+    prompt += 'Return only the code that should be inserted at <CURSOR> position.';
+
+    return prompt;
   }
 
   /**
-   * 清空所有适配器
+   * 解析补全响应
    */
-  clearAdapters(): void {
-    this.adapters.clear();
-    this.currentModel = null;
+  private parseCompletionResponse(content: string): CompletionSuggestion[] {
+    // 提取代码块
+    const codeBlockRegex = /```[\w]*\n([\s\S]*?)\n```/;
+    const match = content.match(codeBlockRegex);
+
+    const completionText = match ? match[1] : content.trim();
+
+    if (!completionText) {
+      return [];
+    }
+
+    return [
+      {
+        text: completionText,
+        kind: 'text',
+        detail: 'AI Suggestion',
+        documentation: 'Code completion generated by AI',
+      },
+    ];
   }
 }

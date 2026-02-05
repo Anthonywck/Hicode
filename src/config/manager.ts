@@ -67,6 +67,14 @@ export class ConfigManager implements IConfigManager {
     this._promptManager = new PromptManager(context);
     // 初始化产品级规范配置管理器
     this._specificationManager = new SpecificationManager(context);
+    
+    // 异步初始化 ModelManager（加载 models.dev 配置）
+    // 注意：这是非阻塞的，初始化会在后台进行
+    if (this._modelManager && typeof (this._modelManager as any).initialize === 'function') {
+      (this._modelManager as any).initialize().catch((error: any) => {
+        console.error('[ConfigManager] Failed to initialize ModelManager:', error);
+      });
+    }
   }
 
   /**

@@ -7,11 +7,10 @@ import * as vscode from 'vscode';
 import {
   getInlineChatProvider,
   getContextManager,
-  getHistoryManager,
+  getSessionManager,
   getAPIClient,
   getConfigManager,
   getCompletionProvider,
-  getAgentSystem,
   getChatWebviewProvider
 } from '../index';
 import { logger } from '../utils/logger';
@@ -207,7 +206,7 @@ export async function openChatHandler(): Promise<void> {
  */
 export async function newConversationHandler(): Promise<void> {
   try {
-    const historyManager = await getHistoryManager();
+    const sessionManager = await getSessionManager();
     const apiClient = await getAPIClient();
     const chatProvider = getChatWebviewProvider();
 
@@ -218,8 +217,8 @@ export async function newConversationHandler(): Promise<void> {
       return;
     }
 
-    // 创建新会话（这会自动更新currentSessionId并清空当前会话的消息）
-    const session = historyManager.createSession(currentModel);
+    // 创建新会话（使用新的 SessionManager API）
+    const session = await sessionManager.create();
 
     // 生成新的convId（用于前端标识）
     const { generateUUID } = await import('../utils/tools');
@@ -341,5 +340,165 @@ export async function undoAgentActionHandler(): Promise<void> {
   } catch (error) {
     vscode.window.showErrorMessage(`撤销操作失败: ${error}`);
     console.error('Error in undoAgentActionHandler:', error);
+  }
+}
+
+/**
+ * 将选中的代码添加到聊天
+ * 从悬浮按钮触发，将当前选中的代码添加到资源列表
+ */
+export async function addSelectionToChatHandler(): Promise<void> {
+  try {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      vscode.window.showWarningMessage('请先选择要添加的代码');
+      return;
+    }
+
+    const document = editor.document;
+    const selection = editor.selection;
+    const filePath = document.uri.fsPath;
+    const languageId = document.languageId;
+
+    // 获取起始和结束行号
+    const startLine = selection.start.line;
+    const endLine = selection.end.line;
+
+    // 获取整行内容
+    const startLineStart = new vscode.Position(startLine, 0);
+    const endLineEnd = document.lineAt(endLine).range.end;
+    const fullRange = new vscode.Range(startLineStart, endLineEnd);
+    const selectedCode = document.getText(fullRange);
+
+    // 发送添加资源事件到前端
+    const provider = getChatWebviewProvider();
+    if (provider) {
+      provider.postMessage({
+        message: MessageType.HICODE_ADD_SELECTION_TO_RESOURCES_B2F,
+        data: {
+          selectCode: selectedCode,
+          language: languageId,
+          languageId: languageId,
+          filePath: filePath,
+          startLine: startLine + 1,
+          endLine: endLine + 1
+        }
+      });
+
+      // 取消选中（清除选择）
+      editor.selection = new vscode.Selection(selection.start, selection.start);
+
+      // 聚焦到聊天视图
+      await vscode.commands.executeCommand('hicode-ai-chat.focus');
+      
+      logger.debug('代码已添加到资源列表', {
+        filePath,
+        languageId,
+        startLine: startLine + 1,
+        endLine: endLine + 1
+      }, 'CommandHandlers');
+    } else {
+      vscode.window.showWarningMessage('聊天界面未初始化，请先打开聊天界面');
+    }
+  } catch (error) {
+    vscode.window.showErrorMessage(`添加代码到聊天失败: ${error}`);
+    logger.error('添加代码到聊天失败', error, 'CommandHandlers');
+  }
+}
+
+/**
+ * 快速编辑选中的代码
+ * 从悬浮按钮触发，对选中的代码进行快速编辑
+ */
+export async function quickEditHandler(): Promise<void> {
+  try {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      vscode.window.showWarningMessage('请先选择要编辑的代码');
+      return;
+    }
+
+    // 打开聊天界面并聚焦
+    await vscode.commands.executeCommand('hicode-ai-chat.focus');
+
+    // 获取选中代码信息
+    const document = editor.document;
+    const selection = editor.selection;
+    const filePath = document.uri.fsPath;
+    const languageId = document.languageId;
+
+    const startLine = selection.start.line;
+    const endLine = selection.end.line;
+
+    const startLineStart = new vscode.Position(startLine, 0);
+    const endLineEnd = document.lineAt(endLine).range.end;
+    const fullRange = new vscode.Range(startLineStart, endLineEnd);
+    const selectedCode = document.getText(fullRange);
+
+    // 发送快速编辑请求到前端
+    const provider = getChatWebviewProvider();
+    if (provider) {
+      provider.postMessage({
+        message: MessageType.HICODE_SELECTION_CHANGE,
+        data: {
+          selectCode: selectedCode,
+          language: languageId,
+          languageId: languageId,
+          filePath: filePath,
+          startLine: startLine + 1,
+          endLine: endLine + 1,
+          quickEdit: true // 标记为快速编辑模式
+        }
+      });
+
+      // 可以在这里自动填充一个编辑提示词
+      // 例如："请帮我优化/重构以下代码："
+      logger.debug('快速编辑已触发', {
+        filePath,
+        languageId,
+        startLine: startLine + 1,
+        endLine: endLine + 1
+      }, 'CommandHandlers');
+    } else {
+      vscode.window.showWarningMessage('聊天界面未初始化，请先打开聊天界面');
+    }
+  } catch (error) {
+    vscode.window.showErrorMessage(`快速编辑失败: ${error}`);
+    logger.error('快速编辑失败', error, 'CommandHandlers');
+  }
+}
+
+/**
+ * 测试选择按钮显示（调试用）
+ */
+export async function testSelectionButtonsHandler(): Promise<void> {
+  try {
+    const editor = vscode.window.activeTextEditor;
+    const hasSelection = editor && !editor.selection.isEmpty;
+
+    vscode.window.showInformationMessage(
+      `测试按钮状态: ${hasSelection ? '有选择' : '无选择'}`,
+      { modal: false }
+    );
+
+    // 尝试手动触发按钮显示
+    if (hasSelection) {
+      // 导入 SelectionActionWidget 并手动触发
+      const { SelectionActionWidget } = await import('../utils/selectionActionWidget');
+      // 这里我们需要访问全局实例，但为了测试，我们直接显示信息
+      vscode.window.showInformationMessage(
+        `选中了 ${editor.selection.end.line - editor.selection.start.line + 1} 行代码`,
+        { modal: false }
+      );
+    }
+
+    console.log('[Test] Selection buttons test', {
+      hasEditor: !!editor,
+      hasSelection: hasSelection,
+      selection: editor?.selection
+    });
+  } catch (error) {
+    vscode.window.showErrorMessage(`测试失败: ${error}`);
+    logger.error('测试选择按钮失败', error, 'CommandHandlers');
   }
 }
