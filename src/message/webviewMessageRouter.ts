@@ -36,7 +36,8 @@ import {
   handleEditSpecification,
   handleDeleteSpecification,
   handleClearSelection,
-  handleInsertCode
+  handleInsertCode,
+  handlePermissionResponse
 } from './webviewMessageHandler';
 
 /**
@@ -213,6 +214,13 @@ export function routeWebviewMessage(
         logger.info('路由到插入代码处理器', { messageType, message }, 'WebviewMessageRouter');
         handleInsertCode(message, webview).catch(error => {
           logger.error('处理插入代码失败', error, 'WebviewMessageRouter');
+        });
+        break;
+
+      // ========== 权限相关消息 ==========
+      case MessageType.HICODE_PERMISSION_RESPONSE_F2B_REQ:
+        handlePermissionResponse(message, webview).catch(error => {
+          logger.error('处理权限响应失败', error, 'WebviewMessageRouter');
         });
         break;
 

@@ -25,6 +25,22 @@ interface ZhipuAIMessage {
 }
 
 /**
+ * 智谱AI工具定义
+ */
+interface ZhipuAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: Record<string, any>;
+      required?: string[];
+    };
+  };
+}
+
+/**
  * 智谱AI API请求格式
  */
 interface ZhipuAIChatRequest {
@@ -34,6 +50,8 @@ interface ZhipuAIChatRequest {
   temperature?: number;
   max_tokens?: number;
   top_p?: number;
+  tools?: ZhipuAITool[];
+  tool_choice?: 'auto' | 'none';
 }
 
 /**
@@ -59,6 +77,18 @@ interface ZhipuAIChatResponse {
 }
 
 /**
+ * 智谱AI工具调用
+ */
+interface ZhipuAIToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/**
  * 智谱AI流式响应数据块
  */
 interface ZhipuAIStreamChunk {
@@ -70,6 +100,7 @@ interface ZhipuAIStreamChunk {
     delta: {
       role?: string;
       content?: string;
+      tool_calls?: ZhipuAIToolCall[];
     };
     finish_reason: string | null;
   }>;
@@ -123,7 +154,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
     }
   }
 
-  /**
+/**
    * 发送流式聊天请求
    */
   async chatStream(
@@ -147,10 +178,13 @@ export class ZhipuAIAdapter implements ModelAdapter {
       console.log(`[ZhipuAIAdapter] axiosInstance.post completed, response received:`, {
         status: response.status,
         statusText: response.statusText,
-        hasData: !!response.data
+        hasData: !!response.data,
+        hasTools: !!zhipuRequest.tools,
+        toolsCount: zhipuRequest.tools?.length || 0,
       });
 
       let buffer = '';
+      let accumulatedToolCalls: Map<string, ZhipuAIToolCall> = new Map();
 
       response.data.on('data', (chunk: Buffer) => {
         buffer += chunk.toString();
@@ -167,14 +201,68 @@ export class ZhipuAIAdapter implements ModelAdapter {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6)) as ZhipuAIStreamChunk;
-              const content = data.choices[0]?.delta?.content;
+              const choice = data.choices[0];
+              const delta = choice?.delta;
+              
+              // 处理文本内容
+              const content = delta?.content;
               if (content) {
+                console.log(`[HICODE DEBUG] 智谱AI收到文本增量:`, { length: content.length, preview: content.substring(0, 50) });
                 onChunk(content);
               }
-              if (data.choices[0]?.finish_reason) {
+              
+              // 处理工具调用
+              const toolCalls = delta?.tool_calls;
+              if (toolCalls && toolCalls.length > 0) {
+                console.log(`[HICODE DEBUG] 智谱AI收到工具调用:`, { count: toolCalls.length });
+                
+                for (const toolCall of toolCalls) {
+                  const id = toolCall.id;
+                  if (id) {
+                    // 如果已经存在，累积参数
+                    if (accumulatedToolCalls.has(id)) {
+                      const existing = accumulatedToolCalls.get(id)!;
+                      if (toolCall.function?.arguments) {
+                        // 累积参数
+                        if (existing.function.arguments) {
+                          existing.function.arguments += toolCall.function.arguments;
+                        } else {
+                          existing.function.arguments = toolCall.function.arguments;
+                        }
+                      }
+                    } else {
+                      // 新的工具调用
+                      accumulatedToolCalls.set(id, {
+                        ...toolCall,
+                        function: {
+                          ...toolCall.function,
+                          arguments: toolCall.function?.arguments || '',
+                        },
+                      });
+                    }
+                  }
+                }
+              }
+              
+              if (choice?.finish_reason) {
+                console.log(`[HICODE DEBUG] 智谱AI流结束，原因: ${choice.finish_reason}`);
+                
+                // 如果有累积的工具调用，打印详细信息
+                if (accumulatedToolCalls.size > 0) {
+                  console.log(`[HICODE DEBUG] 智谱AI累积的工具调用:`);
+                  accumulatedToolCalls.forEach((toolCall, id) => {
+                    console.log(`[HICODE DEBUG] 工具 ${id}:`, {
+                      name: toolCall.function?.name,
+                      arguments: toolCall.function?.arguments,
+                      argumentsLength: toolCall.function?.arguments?.length || 0,
+                    });
+                  });
+                }
+                
                 onEnd();
               }
             } catch (parseError) {
+              console.error(`[HICODE DEBUG] 智谱AI解析响应失败:`, parseError);
               // 忽略解析错误，继续处理下一行
             }
           }
@@ -187,6 +275,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
       });
 
       response.data.on('end', () => {
+        console.log(`[HICODE DEBUG] 智谱AI流结束，累积的工具调用数量: ${accumulatedToolCalls.size}`);
         onEnd();
       });
     } catch (error) {
@@ -281,7 +370,7 @@ export class ZhipuAIAdapter implements ModelAdapter {
     return Math.ceil(chineseChars * 1.5 + englishWords);
   }
 
-  /**
+/**
    * 转换为智谱AI API格式
    */
   private async convertToZhipuAIFormat(request: ChatRequest): Promise<ZhipuAIChatRequest> {
@@ -292,7 +381,34 @@ export class ZhipuAIAdapter implements ModelAdapter {
       }))
     );
     
-    return {
+    // 转换工具格式
+    let tools: ZhipuAITool[] | undefined;
+    if (request.tools && request.tools.length > 0) {
+      console.log(`[HICODE DEBUG] 转换智谱AI工具格式，工具数量: ${request.tools.length}`);
+      tools = request.tools.map(tool => ({
+        type: 'function' as const,
+        function: {
+          name: tool.id,
+          description: tool.description,
+          parameters: tool.inputSchema || {
+            type: 'object',
+            properties: {},
+          },
+        },
+      }));
+      
+      // 打印前几个工具的详细信息
+      tools.slice(0, 3).forEach((tool, index) => {
+        console.log(`[HICODE DEBUG] 智谱AI工具 ${index + 1}:`, {
+          name: tool.function.name,
+          description: tool.function.description?.substring(0, 100) + '...',
+          hasParameters: !!tool.function.parameters.properties,
+          requiredCount: tool.function.parameters.required?.length || 0,
+        });
+      });
+    }
+    
+    const zhipuRequest: ZhipuAIChatRequest = {
       model: request.model,
       messages,
       stream: request.stream,
@@ -300,6 +416,17 @@ export class ZhipuAIAdapter implements ModelAdapter {
       max_tokens: request.maxTokens,
       top_p: 0.7, // 智谱AI推荐的默认值
     };
+    
+    // 只有当有工具时才添加tools字段
+    if (tools && tools.length > 0) {
+      zhipuRequest.tools = tools;
+      zhipuRequest.tool_choice = 'auto'; // 自动选择工具
+      console.log(`[HICODE DEBUG] 智谱AI请求已添加工具，数量: ${tools.length}`);
+    } else {
+      console.log(`[HICODE DEBUG] 智谱AI请求没有工具`);
+    }
+    
+    return zhipuRequest;
   }
 
   /**

@@ -612,10 +612,18 @@ npm run test:coverage
 
 ### 文档
 
+#### 用户文档
 - **[用户指南](docs/user-guide.md)** - 完整的功能文档和使用说明
 - **[配置指南](docs/configuration-guide.md)** - 详细的配置选项和示例
 - **[故障排查](docs/troubleshooting.md)** - 常见问题和解决方案
 - **[快捷键参考](docs/shortcuts-reference.md)** - 所有键盘快捷键的快速参考
+
+#### 开发者文档
+- **[架构文档](docs/ARCHITECTURE.md)** - 系统架构和核心模块说明
+- **[工具开发指南](docs/TOOL_DEVELOPMENT.md)** - 如何开发和注册新工具
+- **[MCP 集成指南](docs/MCP_INTEGRATION.md)** - Model Context Protocol 集成说明
+- **[Skills 开发指南](docs/SKILLS_DEVELOPMENT.md)** - Skills 系统开发指南
+- **[性能优化指南](docs/PERFORMANCE_OPTIMIZATION.md)** - 性能优化策略和最佳实践
 - **[测试指南](docs/testing-guide.md)** - 测试框架和指南
 
 ### 贡献

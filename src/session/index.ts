@@ -3,26 +3,40 @@
  * 导出所有会话相关的接口和实现
  */
 
-// 消息相关
+// MessageV2 相关
 export {
-  MessageRole,
-  type MessageTime,
-  type MessageCost,
-  type MessageError,
-  type FilePart,
   type TextPart,
-  type ToolCallPart,
+  type FilePart,
+  type ToolPart,
+  type ReasoningPart,
+  type CompactionPart,
   type Part,
-  type BaseMessage,
   type UserMessage,
   type AssistantMessage,
+  type MessageInfo,
   type MessageWithParts,
+  type MessageError,
+  type ToolState,
+  type ToolStatePending,
+  type ToolStateRunning,
+  type ToolStateCompleted,
+  type ToolStateError,
   generateMessageID,
   generatePartID,
-} from './message';
+} from './message-v2';
 
-// 重新导出 MessageInfo（从 storage.ts）
-export type { MessageInfo } from './storage';
+// Session Core 相关
+export {
+  Session,
+  SessionState,
+  type SessionMetadata,
+} from './session-core';
+
+// Session Manager 相关
+export {
+  SessionManager,
+  type ISessionManager,
+} from './session-manager';
 
 // 存储相关
 export {

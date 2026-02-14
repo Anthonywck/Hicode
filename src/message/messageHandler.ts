@@ -77,6 +77,26 @@ export interface StreamCallbacks {
   onEnd: () => void;
   /** 发生错误时的回调 */
   onError: (error: Error) => void;
+  /** 工具调用更新时的回调（可选） */
+  onToolCallUpdate?: (update: ToolCallUpdate) => void;
+}
+
+/**
+ * 工具调用更新
+ */
+export interface ToolCallUpdate {
+  /** 更新类型 */
+  type: 'start' | 'complete' | 'error';
+  /** 工具名称 */
+  toolName: string;
+  /** 工具调用ID */
+  toolCallId: string;
+  /** 工具参数（start时） */
+  args?: Record<string, any>;
+  /** 工具结果（complete时） */
+  result?: string;
+  /** 错误信息（error时） */
+  error?: string;
 }
 
 /**
@@ -168,15 +188,18 @@ export class MessageHandler implements IMessageHandler {
     let accumulatedContent = '';
     let finalResponse: ChatResponse | null = null;
 
-    // 使用流式接口，但等待完成
+// 使用流式接口，但等待完成
+    console.log(`[HICODE DEBUG] handleSendMessage调用handleSendStreamMessage`);
     await this.handleSendStreamMessage(
       content,
       {
         onChunk: (chunk: string) => {
           accumulatedContent += chunk;
+          console.log(`[HICODE DEBUG] 非流式处理累积文本块 - 长度: ${chunk.length}, 总长度: ${accumulatedContent.length}`);
         },
         onEnd: () => {
           // 流结束，构建响应
+          console.log(`[HICODE DEBUG] 非流式处理完成 - 总长度: ${accumulatedContent.length}`);
           finalResponse = {
             content: accumulatedContent,
             finishReason: 'stop',
@@ -188,6 +211,7 @@ export class MessageHandler implements IMessageHandler {
           };
         },
         onError: (error: Error) => {
+          console.error(`[HICODE DEBUG] 非流式处理错误:`, error);
           throw error;
         }
       },
@@ -274,7 +298,8 @@ export class MessageHandler implements IMessageHandler {
       }
 
       // 启动主循环，直接传递回调函数以支持实时流式更新
-      // 移除轮询机制，改为直接回调方式（参考 opencode 的实现）
+      // 使用回调方式实现流式响应（参考 opencode 的实现）
+      console.log(`[HICODE DEBUG] MessageHandler开始调用prompt函数`);
       const result = await prompt({
         ...promptInput,
         onTextChunk: (chunk: string) => {
@@ -283,268 +308,38 @@ export class MessageHandler implements IMessageHandler {
         },
         onToolCallUpdate: (toolCall: any) => {
           // 实时发送工具调用更新到前端
-          // TODO: 可以通过消息类型发送工具调用更新
+          console.log(`[HICODE DEBUG] 收到工具调用更新:`, toolCall);
+          if (callbacks.onToolCallUpdate) {
+            callbacks.onToolCallUpdate({
+              type: toolCall.type || 'start',
+              toolName: toolCall.toolName || toolCall.tool || '',
+              toolCallId: toolCall.toolCallId || toolCall.id || '',
+              args: toolCall.args || toolCall.input,
+              result: toolCall.result,
+              error: toolCall.error,
+            });
+          }
         },
       });
       
+      console.log(`[HICODE DEBUG] prompt函数调用完成`);
       // 发送完成标志
       callbacks.onEnd();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      callbacks.onError(new Error(`Failed to send stream message: ${errorMessage}`));
-    }
-  }
-
-  /**
-   * 在处理过程中轮询流式响应
-   * 在 prompt 执行的同时开始轮询，以实时获取文本更新
-   */
-  private async processStreamResponseWhileRunning(
-    session: Session,
-    promptPromise: Promise<MessageWithParts>,
-    callbacks: StreamCallbacks
-  ): Promise<void> {
-    try {
-      // 累积文本内容
-      let accumulatedText = '';
-      const processedToolCalls = new Set<string>();
-      let lastMessageId: string | null = null;
-
-      // 轮询消息部分的变化（直到 prompt 完成）
-      const maxPollingTime = 300000; // 5分钟超时
-      const pollingInterval = 20; // 20ms轮询间隔，更频繁的轮询以实现更好的流式效果
-      const startTime = Date.now();
-
-      // 等待一小段时间让 prompt 开始创建助手消息
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // 尝试获取最新的助手消息ID
-      const messages: MessageWithParts[] = [];
-      for await (const msg of session.getMessages()) {
-        if (msg.role === MessageRole.Assistant) {
-          messages.push(msg);
-        }
-      }
+      console.error(`[HICODE DEBUG] prompt函数调用失败:`, error);
       
-      if (messages.length > 0) {
-        lastMessageId = messages[0].id;
+      // 如果是 API 错误（如 ZhipuAI 的 messages 参数非法），提供更详细的错误信息
+      const apiError = error as any;
+      if (apiError?.statusCode === 400 && apiError?.data?.error) {
+        const apiErrorMessage = apiError.data.error.message || apiError.data.error.code || errorMessage;
+        callbacks.onError(new Error(`API 请求失败: ${apiErrorMessage}`));
+      } else {
+        callbacks.onError(new Error(`Failed to send stream message: ${errorMessage}`));
       }
-
-      // 如果还没有消息ID，等待 prompt 完成
-      if (!lastMessageId) {
-        const result = await promptPromise;
-        lastMessageId = result.id;
-      }
-
-      while (Date.now() - startTime < maxPollingTime) {
-        if (!lastMessageId) {
-          // 如果还没有消息ID，尝试再次获取
-          const messages: MessageWithParts[] = [];
-          for await (const msg of session.getMessages()) {
-            if (msg.role === MessageRole.Assistant) {
-              messages.push(msg);
-            }
-          }
-          if (messages.length > 0) {
-            lastMessageId = messages[0].id;
-          } else {
-            // 如果仍然没有消息，等待一小段时间后继续
-            await new Promise(resolve => setTimeout(resolve, pollingInterval));
-            continue;
-          }
-        }
-
-        // 获取消息的所有部分
-        const parts = await session.getParts(lastMessageId);
-
-        // 处理每个部分
-        for (const part of parts) {
-          if (part.type === 'text') {
-            // 文本部分：发送增量
-            const textPart = part as any;
-            const currentText = textPart.text || '';
-            if (currentText.length > accumulatedText.length) {
-              const newText = currentText.slice(accumulatedText.length);
-              callbacks.onChunk(newText);
-              accumulatedText = currentText;
-            }
-          } else if (part.type === 'tool-call') {
-            // 工具调用：发送工具调用状态更新
-            const toolPart = part as any;
-            const toolCallId = toolPart.toolCallId;
-
-            // 只处理新的或状态变化的工具调用
-            if (!processedToolCalls.has(toolCallId) || 
-                (toolPart.state.status === 'completed' || toolPart.state.status === 'error')) {
-              
-              if (toolPart.state.status === 'pending') {
-                callbacks.onChunk(`\n[准备调用工具: ${toolPart.tool}]\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'running') {
-                callbacks.onChunk(`\n[正在执行工具: ${toolPart.tool}]\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'completed') {
-                const output = toolPart.state.output || '';
-                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行完成]\n${output}\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'error') {
-                const error = toolPart.state.error || '未知错误';
-                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行失败: ${error}]\n`);
-                processedToolCalls.add(toolCallId);
-              }
-            }
-          }
-        }
-
-        // 检查消息是否完成
-        const message = await session.getMessage(lastMessageId);
-        if (message && message.role === MessageRole.Assistant) {
-          const assistantMsg = message as any;
-          if (assistantMsg.time?.completed || assistantMsg.finish) {
-            // 消息已完成，退出轮询
-            break;
-          }
-        }
-
-        // 检查 prompt 是否已完成（非阻塞）
-        const isPromptDone = await Promise.race([
-          promptPromise.then(() => true).catch(() => false),
-          new Promise<boolean>(resolve => setTimeout(() => resolve(false), 0))
-        ]);
-
-        if (isPromptDone) {
-          // prompt 已完成，最后检查一次消息是否完成
-          const finalMessage = await session.getMessage(lastMessageId);
-          if (finalMessage && finalMessage.role === MessageRole.Assistant) {
-            const assistantMsg = finalMessage as any;
-            if (assistantMsg.time?.completed || assistantMsg.finish) {
-              break;
-            }
-          }
-        }
-
-        // 等待一段时间后继续轮询
-        await new Promise(resolve => setTimeout(resolve, pollingInterval));
-      }
-
-      // 发送完成标志
-      callbacks.onEnd();
-    } catch (error) {
-      callbacks.onError(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  /**
-   * 处理流式响应
-   * 监听消息部分的变化并调用回调
-   * 
-   * 注意：当前实现是轮询方式，未来可以改为事件驱动方式以获得更好的实时性
-   */
-  private async processStreamResponse(
-    session: Session,
-    result: MessageWithParts,
-    callbacks: StreamCallbacks
-  ): Promise<void> {
-    try {
-      // 累积文本内容
-      let accumulatedText = '';
-      const processedToolCalls = new Set<string>();
-
-      // 先检查一次消息是否已经完成
-      let messageCompleted = false;
-      const initialMessage = await session.getMessage(result.id);
-      if (initialMessage && initialMessage.role === MessageRole.Assistant) {
-        const assistantMsg = initialMessage as any;
-        messageCompleted = !!(assistantMsg.time?.completed || assistantMsg.finish);
-      }
-
-      // 如果消息已经完成，直接发送所有文本内容
-      if (messageCompleted) {
-        const parts = await session.getParts(result.id);
-        for (const part of parts) {
-          if (part.type === 'text') {
-            const textPart = part as any;
-            const currentText = textPart.text || '';
-            if (currentText.length > accumulatedText.length) {
-              const newText = currentText.slice(accumulatedText.length);
-              callbacks.onChunk(newText);
-              accumulatedText = currentText;
-            }
-          }
-        }
-        // 发送完成标志
-        callbacks.onEnd();
-        return;
-      }
-
-      // 轮询消息部分的变化（直到消息完成）
-      const maxPollingTime = 300000; // 5分钟超时
-      const pollingInterval = 100; // 100ms轮询间隔
-      const startTime = Date.now();
-
-      while (Date.now() - startTime < maxPollingTime) {
-        // 获取消息的所有部分
-        const parts = await session.getParts(result.id);
-
-        // 处理每个部分
-        for (const part of parts) {
-          if (part.type === 'text') {
-            // 文本部分：发送增量
-            const textPart = part as any;
-            const currentText = textPart.text || '';
-            if (currentText.length > accumulatedText.length) {
-              const newText = currentText.slice(accumulatedText.length);
-              callbacks.onChunk(newText);
-              accumulatedText = currentText;
-            }
-          } else if (part.type === 'tool-call') {
-            // 工具调用：发送工具调用状态更新
-            const toolPart = part as any;
-            const toolCallId = toolPart.toolCallId;
-
-            // 只处理新的或状态变化的工具调用
-            if (!processedToolCalls.has(toolCallId) || 
-                (toolPart.state.status === 'completed' || toolPart.state.status === 'error')) {
-              
-              if (toolPart.state.status === 'pending') {
-                callbacks.onChunk(`\n[准备调用工具: ${toolPart.tool}]\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'running') {
-                callbacks.onChunk(`\n[正在执行工具: ${toolPart.tool}]\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'completed') {
-                const output = toolPart.state.output || '';
-                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行完成]\n${output}\n`);
-                processedToolCalls.add(toolCallId);
-              } else if (toolPart.state.status === 'error') {
-                const error = toolPart.state.error || '未知错误';
-                callbacks.onChunk(`\n[工具 ${toolPart.tool} 执行失败: ${error}]\n`);
-                processedToolCalls.add(toolCallId);
-              }
-            }
-          }
-        }
-
-        // 检查消息是否完成
-        const message = await session.getMessage(result.id);
-        if (message && message.role === MessageRole.Assistant) {
-          const assistantMsg = message as any;
-          if (assistantMsg.time?.completed || assistantMsg.finish) {
-            // 消息已完成，退出轮询
-            break;
-          }
-        }
-
-        // 等待一段时间后继续轮询
-        await new Promise(resolve => setTimeout(resolve, pollingInterval));
-      }
-
-      // 发送完成标志
-      callbacks.onEnd();
-    } catch (error) {
-      callbacks.onError(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
 
   /**
    * 重新发送消息

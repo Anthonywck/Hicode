@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { MessageWithParts } from '../session/message';
 import type { AgentConfig } from '../agent/types';
 import type { FilePart } from '../session/message';
+import { truncateOutput } from './truncation';
 
 /**
  * 工具元数据
@@ -175,7 +176,23 @@ export namespace Tool {
           }
 
           const result = await execute(args, ctx);
-          return result;
+          
+          // Skip truncation for tools that handle it themselves
+          if (result.metadata.truncated !== undefined) {
+            return result;
+          }
+          
+          // Apply truncation if needed
+          const truncated = await truncateOutput(result.output, {}, initCtx?.agent);
+          return {
+            ...result,
+            output: truncated.content,
+            metadata: {
+              ...result.metadata,
+              truncated: truncated.truncated,
+              ...(truncated.truncated && { outputPath: truncated.outputPath }),
+            },
+          };
         };
 
         return toolInfo;

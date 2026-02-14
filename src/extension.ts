@@ -6,6 +6,11 @@
  * 2. 初始化各个子系统
  * 3. 注册命令和提供器
  * 4. 管理扩展生命周期
+ * 
+ * 架构迁移状态：
+ * - ✅ 新系统已初始化：Session Manager, Agent Registry, Tool Registry, Permission System, MCP
+ * - ✅ 命令系统已更新：使用集中式命令注册表
+ * - ⚠️ 内联聊天提供器仍使用旧的 AgentSystem 和 HistoryManager（待任务 6.1 迁移）
  */
 
 import * as vscode from 'vscode';
@@ -109,6 +114,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Store the extension context globally
   extensionContext = context;
   
+  // Initialize todo storage with extension context
+  const { setExtensionContext: setTodoStorageContext } = await import('./tool/builtin/todo-storage');
+  setTodoStorageContext(context);
+  
   try {
     console.log('HiCode AI Integration: Starting activation...');
     timer.mark('start');
@@ -119,7 +128,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     timer.mark('lazy-modules-initialized');
 
     // ========== 第一阶段（续）：初始化新系统 ==========
-    // 初始化 Agent、Tool、MCP 等新系统
+    // 初始化 Session、Agent、Tool、Permission、MCP 等新系统
     await initializeNewSystems();
     timer.mark('new-systems-initialized');
 
@@ -484,11 +493,34 @@ async function loadMinimalConfiguration(context: vscode.ExtensionContext): Promi
 /**
  * 初始化新系统
  * 
- * 初始化 Agent、Tool、MCP 等新系统
+ * 初始化 Agent、Tool、Session、Permission、MCP 等新系统
  * 这些系统在扩展激活时就需要初始化，但不会加载重型依赖
  */
 async function initializeNewSystems(): Promise<void> {
   console.log('Initializing new systems...');
+  
+  // 初始化 SkillManager
+  try {
+    const { getSkillManager } = await import('./skill/skill');
+    const skillManager = getSkillManager(extensionContext!);
+    await skillManager.initialize();
+    console.log('✓ SkillManager initialized');
+  } catch (error) {
+    console.warn('⚠ Failed to initialize SkillManager:', error);
+    // 不阻止扩展激活，SkillManager 会在需要时自动初始化
+  }
+
+  // 初始化 Session Manager（需要 extension context）
+  try {
+    if (!extensionContext) {
+      throw new Error('Extension context not available');
+    }
+    const { getSessionManager } = await import('./session/session');
+    getSessionManager(extensionContext);
+    console.log('✓ Session Manager initialized');
+  } catch (error) {
+    console.warn('Failed to initialize Session Manager:', error);
+  }
 
   // 初始化 Agent 注册表（同步初始化，轻量级）
   try {
@@ -518,6 +550,9 @@ async function initializeNewSystems(): Promise<void> {
       TodoReadTool,
     } = await import('./tool/builtin');
     
+    // 注册 Skill 工具
+    const { SkillTool } = await import('./tool/skill');
+    
     ToolRegistry.registerAll([
       ReadTool,
       WriteTool,
@@ -529,11 +564,21 @@ async function initializeNewSystems(): Promise<void> {
       WebFetchTool,
       TodoWriteTool,
       TodoReadTool,
+      SkillTool,
     ]);
     
     console.log(`✓ Tool Registry initialized with ${registry.size()} tools`);
   } catch (error) {
     console.warn('Failed to initialize Tool Registry:', error);
+  }
+
+  // Permission 系统已集成在 Agent Registry 中，无需单独初始化
+  // 验证 Permission 模块可以正常导入
+  try {
+    await import('./permission');
+    console.log('✓ Permission system ready');
+  } catch (error) {
+    console.warn('Failed to load Permission system:', error);
   }
 
   // MCP 系统采用懒加载，在需要时再初始化
@@ -795,6 +840,9 @@ export async function getIntentRouter(): Promise<any> {
 /**
  * 获取内联聊天提供器（懒加载，单例）
  * 需求: 9.1
+ * 
+ * 注意：内联聊天提供器目前仍使用旧的 AgentSystem 和 HistoryManager
+ * 这将在后续任务中迁移到新的 Session 系统
  */
 export async function getInlineChatProvider(): Promise<any> {
   if (!inlineChatProviderModule) {
@@ -805,14 +853,18 @@ export async function getInlineChatProvider(): Promise<any> {
     const InlineChatProviderClass = await inlineChatProviderModule.load();
     const apiClient = await getAPIClient();
     const contextMgr = await getContextManager();
-    // TODO: Update InlineChatProvider to use new SessionManager (task 6.1)
-    // For now, keep old AgentSystem and HistoryManager for compatibility
+    
+    // TODO: Migrate InlineChatProvider to use new Session system (task 6.1)
+    // Temporarily using legacy systems for compatibility
+    // These will be removed once migration is complete
     const { AgentSystem } = await import('./agent/system');
     const { HistoryManager } = await import('./history/manager');
     const { VSCodeStorageManager } = await import('./history/storage');
+    
     if (!extensionContext) {
       throw new Error('Extension context not available');
     }
+    
     const storageManager = new VSCodeStorageManager(extensionContext.globalState);
     const agentSystem = new AgentSystem(apiClient, contextMgr);
     const historyManager = new HistoryManager(storageManager);

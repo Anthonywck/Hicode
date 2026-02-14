@@ -285,7 +285,17 @@ export namespace Skill {
    */
   export async function all(): Promise<Record<string, SkillInfo>> {
     if (!skillManagerInstance) {
-      throw new Error('SkillManager not initialized');
+      // 如果 SkillManager 未初始化，尝试自动初始化
+      try {
+        const { getExtensionContext } = await import('../extension');
+        const context = await getExtensionContext();
+        skillManagerInstance = getSkillManager(context);
+        await skillManagerInstance.initialize();
+      } catch (error) {
+        // 如果无法初始化，返回空技能列表（而不是抛出错误）
+        log.warn('SkillManager 未初始化，返回空技能列表', { error });
+        return {};
+      }
     }
     return await skillManagerInstance.all();
   }
@@ -295,7 +305,16 @@ export namespace Skill {
    */
   export async function get(name: string): Promise<SkillInfo | null> {
     if (!skillManagerInstance) {
-      throw new Error('SkillManager not initialized');
+      // 如果 SkillManager 未初始化，尝试自动初始化
+      try {
+        const { getExtensionContext } = await import('../extension');
+        const context = await getExtensionContext();
+        skillManagerInstance = getSkillManager(context);
+        await skillManagerInstance.initialize();
+      } catch (error) {
+        log.warn('SkillManager 未初始化，无法获取技能', { name, error });
+        return null;
+      }
     }
     return await skillManagerInstance.get(name);
   }
@@ -305,7 +324,16 @@ export namespace Skill {
    */
   export async function getContent(name: string): Promise<string | null> {
     if (!skillManagerInstance) {
-      throw new Error('SkillManager not initialized');
+      // 如果 SkillManager 未初始化，尝试自动初始化
+      try {
+        const { getExtensionContext } = await import('../extension');
+        const context = await getExtensionContext();
+        skillManagerInstance = getSkillManager(context);
+        await skillManagerInstance.initialize();
+      } catch (error) {
+        log.warn('SkillManager 未初始化，无法获取技能内容', { name, error });
+        return null;
+      }
     }
     return await skillManagerInstance.getContent(name);
   }

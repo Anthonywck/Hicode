@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { PermissionRuleset, PermissionRule } from './ruleset';
 import { evaluate, isAllowed, isDenied } from './evaluator';
 import { createLogger } from '../utils/logger';
+import * as MessageType from '../utils/messageType';
 
 const logger = createLogger('Permission');
 
@@ -213,13 +214,29 @@ export class PermissionManager {
   /**
    * 通知权限请求（可以被子类重写以集成 UI）
    */
-  protected notifyPermissionRequest(request: PermissionRequest): void {
+  public notifyPermissionRequest(request: PermissionRequest): void {
     logger.info('Permission request created', {
       id: request.id,
       sessionID: request.sessionID,
       permission: request.permission,
       patterns: request.patterns,
     });
+    
+    // 尝试发送权限请求到前端（如果 webview 可用）
+    try {
+      const { getChatWebviewProvider } = require('../extension');
+      const chatProvider = getChatWebviewProvider();
+      
+      if (chatProvider) {
+        chatProvider.postMessage({
+          message: MessageType.HICODE_PERMISSION_REQUEST_B2F,
+          data: request,
+        });
+      }
+    } catch (error) {
+      // 如果无法发送到前端，只记录日志
+      logger.debug('无法发送权限请求到前端', { error });
+    }
   }
   
   /**
@@ -281,4 +298,41 @@ export class CorrectedError extends Error {
     );
     this.name = 'CorrectedError';
   }
+}
+
+/**
+ * 全局权限管理器实例
+ */
+let globalPermissionManager: PermissionManager | null = null;
+
+/**
+ * 获取全局权限管理器实例
+ * @param context VS Code 扩展上下文（可选，用于通知权限请求）
+ * @returns 权限管理器实例
+ */
+export function getPermissionManager(context?: any): PermissionManager {
+  if (!globalPermissionManager) {
+    globalPermissionManager = new PermissionManager();
+    
+    // 如果提供了 context，可以设置通知函数来发送权限请求到前端
+    if (context) {
+      const { getChatWebviewProvider } = require('../extension');
+      const chatProvider = getChatWebviewProvider();
+      
+      if (chatProvider) {
+        // 重写 notifyPermissionRequest 方法，发送权限请求到前端
+        const originalNotify = globalPermissionManager.notifyPermissionRequest.bind(globalPermissionManager);
+        globalPermissionManager.notifyPermissionRequest = (request: PermissionRequest) => {
+          originalNotify(request);
+          
+          // 发送权限请求到前端
+          chatProvider.postMessage({
+            message: 'hicode_permission_request_b2f',
+            data: request,
+          });
+        };
+      }
+    }
+  }
+  return globalPermissionManager;
 }

@@ -60,9 +60,7 @@ export interface StreamInput {
 /**
  * LLM 流式输出
  */
-export interface StreamOutput {
-  stream: StreamTextResult<any, any>;
-}
+export type StreamOutput = StreamTextResult<ToolSet, any>;
 
 const OUTPUT_TOKEN_MAX = 32_000;
 
@@ -135,9 +133,192 @@ export async function stream(input: StreamInput): Promise<StreamOutput> {
   // 这里使用改进的工具解析逻辑，确保工具参数不包含 Zod 内部结构
   const tools = input.tools || (await resolveTools(input));
 
+  // LiteLLM and some Anthropic proxies require the tools parameter to be present
+  // when message history contains tool calls, even if no tools are being used.
+  // Add a dummy tool that is never called to satisfy this validation.
+  // This is enabled for:
+  // 1. Providers with "litellm" in their ID or API ID (auto-detected)
+  // 2. Providers with explicit "litellmProxy: true" option (opt-in for custom gateways)
+  const isLiteLLMProxy =
+    input.provider.options?.['litellmProxy'] === true ||
+    input.model.providerID.toLowerCase().includes('litellm') ||
+    input.model.api.id.toLowerCase().includes('litellm');
+
+  if (isLiteLLMProxy && Object.keys(tools).length === 0 && hasToolCalls(input.messages)) {
+    tools['_noop'] = tool({
+      description:
+        'Placeholder for LiteLLM/Anthropic proxy compatibility - required when message history contains tool calls but no active tools are needed',
+      inputSchema: jsonSchema({ type: 'object', properties: {} }),
+      execute: async () => ({ output: '', title: '', metadata: {} }),
+    });
+  }
+
   // 准备消息和配置（参考 opencode 的实现）
   // opencode 直接传递 messages 数组，在 middleware 中转换
   const providerOptions = ProviderTransform.providerOptions(input.model, options);
+  
+  // 构建最终的消息数组（用于日志打印）
+  const finalMessages = (() => {
+    const systemMessages: ModelMessage[] = system
+      .filter((x) => typeof x === 'string' && x.trim() !== '')
+      .map((x): ModelMessage => ({
+        role: 'system',
+        content: typeof x === 'string' ? x : String(x),
+      }));
+    
+    const filteredMessages = input.messages.filter((msg) => {
+      if (msg.role === 'system') {
+        return false;
+      }
+      return true;
+    });
+    
+    return [
+      ...systemMessages,
+      ...filteredMessages,
+    ];
+  })();
+  
+  // ========== 打印详细的调用信息 ==========
+  console.log('\n');
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('🚀 [HICODE] Agent 调用模型 - 详细信息');
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log(`📋 Session ID: ${input.sessionID}`);
+  console.log(`🤖 Agent: ${input.agent.name}`);
+  console.log(`🔧 Model: ${input.model.providerID}/${input.model.modelID}`);
+  console.log(`📊 Model API: ${input.model.api.npm}`);
+  console.log('');
+  
+  // 打印模型参数
+  console.log('⚙️  模型参数:');
+  console.log(`   - Temperature: ${temperature ?? 'N/A'}`);
+  console.log(`   - TopP: ${topP}`);
+  console.log(`   - MaxOutputTokens: ${maxOutputTokens ?? 'N/A'}`);
+  console.log(`   - MaxRetries: ${input.retries ?? 0}`);
+  console.log('');
+  
+  // 打印系统提示词
+  console.log('📝 System Prompt:');
+  if (system.length === 0) {
+    console.log('   (无系统提示词)');
+  } else {
+    system.forEach((sysPrompt, index) => {
+      const promptStr = typeof sysPrompt === 'string' ? sysPrompt : String(sysPrompt);
+      const preview = promptStr.length > 500 ? promptStr.substring(0, 500) + '...' : promptStr;
+      console.log(`   [System ${index + 1}] (${promptStr.length} 字符)`);
+      console.log(`   ${preview.split('\n').map(line => `   ${line}`).join('\n')}`);
+      if (promptStr.length > 500) {
+        console.log(`   ... (省略 ${promptStr.length - 500} 字符)`);
+      }
+    });
+  }
+  console.log('');
+  
+  // 打印消息历史
+  console.log(`💬 消息历史 (${finalMessages.length} 条):`);
+  finalMessages.forEach((msg, index) => {
+    const role = msg.role.toUpperCase();
+    let contentPreview = '';
+    
+    if (typeof msg.content === 'string') {
+      contentPreview = msg.content.length > 200 
+        ? msg.content.substring(0, 200) + '...' 
+        : msg.content;
+    } else if (Array.isArray(msg.content)) {
+      const textParts = msg.content
+        .filter((part: any) => part.type === 'text')
+        .map((part: any) => part.text || '')
+        .join(' ');
+      contentPreview = textParts.length > 200 
+        ? textParts.substring(0, 200) + '...' 
+        : textParts;
+      
+      // 检查是否有工具调用
+      const toolCalls = msg.content.filter((part: any) => part.type === 'tool-call');
+      const toolResults = msg.content.filter((part: any) => part.type === 'tool-result');
+      if (toolCalls.length > 0 || toolResults.length > 0) {
+        contentPreview += ` [包含 ${toolCalls.length} 个工具调用, ${toolResults.length} 个工具结果]`;
+      }
+    } else {
+      contentPreview = JSON.stringify(msg.content).substring(0, 200);
+    }
+    
+    const contentLength = typeof msg.content === 'string' 
+      ? msg.content.length 
+      : Array.isArray(msg.content)
+        ? msg.content.reduce((sum: number, part: any) => {
+            if (part.type === 'text' && part.text) return sum + part.text.length;
+            return sum;
+          }, 0)
+        : JSON.stringify(msg.content).length;
+    
+    console.log(`   [${index + 1}] ${role} (${contentLength} 字符)`);
+    console.log(`       ${contentPreview.split('\n').map(line => `       ${line}`).join('\n')}`);
+  });
+  console.log('');
+  
+  // 打印工具列表
+  const toolNames = Object.keys(tools).filter((x) => x !== 'invalid' && x !== '_noop');
+  console.log(`🛠️  可用工具 (${toolNames.length} 个):`);
+  if (toolNames.length === 0) {
+    console.log('   (无可用工具)');
+  } else {
+    toolNames.forEach((toolName, index) => {
+      const toolInfo = tools[toolName];
+      const description = toolInfo.description || '(无描述)';
+      const descPreview = description.length > 100 
+        ? description.substring(0, 100) + '...' 
+        : description;
+      console.log(`   [${index + 1}] ${toolName}`);
+      console.log(`       ${descPreview}`);
+    });
+  }
+  console.log('');
+  
+  // 打印 Provider Options（摘要）
+  console.log('🔧 Provider Options:');
+  if (!providerOptions || typeof providerOptions !== 'object') {
+    console.log('   (无额外选项)');
+  } else {
+    const optionsKeys = Object.keys(providerOptions);
+    if (optionsKeys.length === 0) {
+      console.log('   (无额外选项)');
+    } else {
+      // 只打印前几个选项，避免输出过长
+      const previewKeys = optionsKeys.slice(0, 5);
+      previewKeys.forEach(key => {
+        const value = providerOptions[key];
+        const valueStr = typeof value === 'object' 
+          ? JSON.stringify(value).substring(0, 100) 
+          : String(value);
+        console.log(`   - ${key}: ${valueStr}`);
+      });
+      if (optionsKeys.length > 5) {
+        console.log(`   ... (还有 ${optionsKeys.length - 5} 个选项)`);
+      }
+    }
+  }
+  console.log('');
+  
+  // 打印 Headers（摘要）
+  const headers = input.model.headers || {};
+  const headerKeys = Object.keys(headers);
+  if (headerKeys.length > 0) {
+    console.log('📨 Headers:');
+    headerKeys.forEach(key => {
+      // 隐藏敏感信息
+      const value = key.toLowerCase().includes('key') || key.toLowerCase().includes('token')
+        ? '***HIDDEN***'
+        : headers[key];
+      console.log(`   - ${key}: ${value}`);
+    });
+    console.log('');
+  }
+  
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('\n');
+  // ========== 日志打印结束 ==========
   
   // 参考 opencode：直接传递 messages，使用 wrapLanguageModel 和 middleware 转换
   const result = streamText({
@@ -207,15 +388,34 @@ export async function stream(input: StreamInput): Promise<StreamOutput> {
     },
     maxRetries: input.retries ?? 0,
     // 参考 opencode：直接传递 messages，使用 wrapLanguageModel 和 middleware 转换
-    messages: [
-      ...system.map(
-        (x): ModelMessage => ({
+    // 确保所有 system 消息的 content 都是字符串
+    messages: (() => {
+      const systemMessages: ModelMessage[] = system
+        .filter((x) => typeof x === 'string' && x.trim() !== '')
+        .map((x): ModelMessage => ({
           role: 'system',
-          content: x,
-        }),
-      ),
-      ...input.messages,
-    ],
+          content: typeof x === 'string' ? x : String(x),
+        }));
+      
+      // 验证 input.messages 中没有意外的 system 消息（应该由 system 数组统一管理）
+      const filteredMessages = input.messages.filter((msg) => {
+        if (msg.role === 'system') {
+          log.warn('发现意外的 system 消息，将被忽略', {
+            sessionID: input.sessionID,
+            content: typeof msg.content === 'string' 
+              ? msg.content.substring(0, 100) 
+              : JSON.stringify(msg.content).substring(0, 100),
+          });
+          return false;
+        }
+        return true;
+      });
+      
+      return [
+        ...systemMessages,
+        ...filteredMessages,
+      ];
+    })(),
     // 参考 opencode：使用 wrapLanguageModel 和 middleware 转换消息
     // 关键点：middleware 中的 transformParams 会在运行时转换消息格式
     // 对于 zhipuai，ProviderTransform.message 会：
@@ -229,10 +429,14 @@ export async function stream(input: StreamInput): Promise<StreamOutput> {
           specificationVersion: 'v3' as const,
           async transformParams(args) {
             if (args.type === 'stream') {
-              // @ts-expect-error
               // 转换消息格式：合并 system 消息，确保格式正确
-              // 注意：这里转换后的消息应该符合 ModelMessage[] schema
-              args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options);
+              // 注意：AI SDK 的 middleware 使用 prompt 参数（内部将 messages 转换为 prompt）
+              // prompt 参数在 middleware 中可用，但类型定义可能不完整
+              if (args.params.prompt) {
+                // @ts-expect-error - Type mismatch between prompt format and ModelMessage[]
+                // ProviderTransform.message 返回 ModelMessage[]，但 prompt 可能是其他格式
+                args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options);
+              }
               
               // 注意：工具参数清理已移至 resolveTools 函数中
               // 这里不再需要清理，因为 resolveTools 已确保所有工具参数不包含 Zod 内部结构
@@ -250,7 +454,7 @@ export async function stream(input: StreamInput): Promise<StreamOutput> {
     },
   });
   
-  return { stream: result };
+  return result;
 }
 
 /**
@@ -266,6 +470,16 @@ async function resolveTools(
   // 如果没有工具注册表，返回空对象
   if (!input.toolRegistry) {
     return tools;
+  }
+
+  // 获取 MCP 工具（如果可用）
+  try {
+    const { getMcpTools } = await import('../mcp/tools');
+    const mcpTools = await getMcpTools();
+    Object.assign(tools, mcpTools);
+    log.debug('MCP 工具已加载', { count: Object.keys(mcpTools).length });
+  } catch (error) {
+    log.debug('无法加载 MCP 工具', { error: error instanceof Error ? error.message : String(error) });
   }
 
   // 获取所有工具
@@ -351,4 +565,18 @@ async function resolveTools(
   }
 
   return tools;
+}
+
+/**
+ * Check if messages contain any tool-call content
+ * Used to determine if a dummy tool should be added for LiteLLM proxy compatibility
+ */
+export function hasToolCalls(messages: ModelMessage[]): boolean {
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      if (part.type === 'tool-call' || part.type === 'tool-result') return true;
+    }
+  }
+  return false;
 }

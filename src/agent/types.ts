@@ -76,14 +76,24 @@ export interface AgentHistoryEntry {
 }
 
 /**
- * Agent类型
+ * Agent类型（支持扩展）
  */
-export type AgentType = 'build' | 'plan' | 'general' | 'explore';
+export type AgentType = string;
 
 /**
  * Agent模式
  */
 export type AgentMode = 'primary' | 'subagent' | 'all';
+
+/**
+ * 模型配置
+ */
+export interface ModelConfig {
+  /** 提供者ID */
+  providerID: string;
+  /** 模型ID */
+  modelID: string;
+}
 
 /**
  * Agent配置
@@ -97,12 +107,14 @@ export interface AgentConfig {
   description?: string;
   /** 提示词模板 */
   prompt?: string;
-  /** 模型ID */
+  /** 模型配置（支持 providerID + modelID） */
+  model?: ModelConfig;
+  /** 模型ID（向后兼容，如果设置了 model 则优先使用 model） */
   modelId?: string;
   /** Agent模式 */
-  mode?: AgentMode;
+  mode: AgentMode;
   /** 权限规则集 */
-  permission?: PermissionRuleset;
+  permission: PermissionRuleset;
   /** 是否启用 */
   enabled?: boolean;
   /** 是否隐藏（不显示在列表中） */
@@ -115,6 +127,8 @@ export interface AgentConfig {
   steps?: number;
   /** 是否为原生Agent */
   native?: boolean;
+  /** 颜色（用于UI显示） */
+  color?: string;
   /** 其他选项 */
   options?: Record<string, any>;
 }

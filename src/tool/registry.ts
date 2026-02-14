@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import type { Tool } from './tool';
 import type { AgentConfig } from '../agent/types';
+import { evaluate } from '../permission/evaluator';
 
 /**
  * 工具注册表类
@@ -90,19 +91,60 @@ export class ToolRegistry {
   }
 
   /**
+   * 检查工具是否被Agent允许使用
+   * @param toolId 工具ID
+   * @param agent Agent配置
+   * @returns 是否允许
+   */
+  private isToolAllowed(toolId: string, agent?: AgentConfig): boolean {
+    if (!agent?.permission) {
+      return true; // 如果没有权限配置，默认允许
+    }
+    
+    const rule = evaluate(toolId, '*', agent.permission);
+    return rule.action !== 'deny';
+  }
+
+  /**
    * 获取已初始化的工具列表（用于AI SDK）
    * @param agent Agent配置（可选）
+   * @param options 选项
+   * @param options.filterByPermission 是否根据权限过滤工具（默认true）
+   * @param options.tools 工具白名单（如果提供，只返回这些工具）
    * @returns 已初始化的工具列表
    */
-  async tools(agent?: AgentConfig): Promise<
+  async tools(
+    agent?: AgentConfig,
+    options?: {
+      filterByPermission?: boolean;
+      tools?: Record<string, boolean>;
+    }
+  ): Promise<
     Array<{
       id: string;
       description: string;
       parameters: z.ZodType;
     }>
   > {
+    const filterByPermission = options?.filterByPermission !== false;
+    const toolWhitelist = options?.tools;
+    
+    // 先过滤工具
+    let filteredTools = this.all();
+    
+    // 如果提供了工具白名单，只返回白名单中的工具
+    if (toolWhitelist) {
+      filteredTools = filteredTools.filter((tool) => toolWhitelist[tool.id] === true);
+    }
+    
+    // 根据权限过滤
+    if (filterByPermission && agent) {
+      filteredTools = filteredTools.filter((tool) => this.isToolAllowed(tool.id, agent));
+    }
+    
+    // 初始化工具
     const result = await Promise.all(
-      this.all().map(async (tool) => {
+      filteredTools.map(async (tool) => {
         const initialized = await tool.init({ agent });
         return {
           id: tool.id,
@@ -111,6 +153,7 @@ export class ToolRegistry {
         };
       })
     );
+    
     return result;
   }
 }
@@ -209,13 +252,19 @@ export namespace ToolRegistry {
   /**
    * 获取已初始化的工具列表
    */
-  export async function tools(agent?: AgentConfig): Promise<
+  export async function tools(
+    agent?: AgentConfig,
+    options?: {
+      filterByPermission?: boolean;
+      tools?: Record<string, boolean>;
+    }
+  ): Promise<
     Array<{
       id: string;
       description: string;
       parameters: z.ZodType;
     }>
   > {
-    return getToolRegistry().tools(agent);
+    return getToolRegistry().tools(agent, options);
   }
 }

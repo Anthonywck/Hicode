@@ -42,9 +42,18 @@ export interface IAgentRegistry {
  */
 export class AgentRegistry implements IAgentRegistry {
   private agents: Map<AgentType, AgentConfig> = new Map();
+  private defaultAgentName?: string;
 
-  constructor() {
+  constructor(defaultAgentName?: string) {
+    this.defaultAgentName = defaultAgentName;
     this.initializeDefaults();
+  }
+
+  /**
+   * 设置默认Agent名称
+   */
+  setDefaultAgentName(name?: string): void {
+    this.defaultAgentName = name;
   }
 
   /**
@@ -70,17 +79,18 @@ export class AgentRegistry implements IAgentRegistry {
 
   /**
    * 获取默认Agent配置
-   * @param defaultAgentName 配置的默认Agent名称（可选）
+   * @param defaultAgentName 配置的默认Agent名称（可选，优先使用实例的默认名称）
    */
   getDefault(defaultAgentName?: string): AgentConfig {
-    if (defaultAgentName) {
-      const agent = this.get(defaultAgentName as AgentType);
+    const name = defaultAgentName ?? this.defaultAgentName;
+    if (name) {
+      const agent = this.get(name as AgentType);
       if (agent) {
         if (agent.mode === 'subagent') {
-          throw new Error(`default agent "${defaultAgentName}" is a subagent`);
+          throw new Error(`default agent "${name}" is a subagent`);
         }
-        if ((agent as any).hidden === true) {
-          throw new Error(`default agent "${defaultAgentName}" is hidden`);
+        if (agent.hidden === true) {
+          throw new Error(`default agent "${name}" is hidden`);
         }
         return agent;
       }
@@ -88,7 +98,7 @@ export class AgentRegistry implements IAgentRegistry {
 
     const allAgents = this.getAll();
     const primaryVisible = allAgents.find(
-      agent => agent.mode === 'primary' && (agent.enabled ?? true) && !(agent as any).hidden
+      agent => agent.mode === 'primary' && (agent.enabled ?? true) && !agent.hidden
     );
     if (primaryVisible) {
       return primaryVisible;
@@ -99,7 +109,16 @@ export class AgentRegistry implements IAgentRegistry {
       return enabled;
     }
 
-    return this.get('build') || this.getAll()[0] || this.createDefaultBuildAgent();
+    const buildAgent = this.get('build');
+    if (buildAgent) {
+      return buildAgent;
+    }
+
+    if (allAgents.length > 0) {
+      return allAgents[0];
+    }
+
+    return this.createDefaultBuildAgent();
   }
 
   /**
@@ -132,6 +151,7 @@ export class AgentRegistry implements IAgentRegistry {
           plan_enter: 'allow',
         })
       ),
+      options: {},
     });
 
     this.register({
@@ -152,6 +172,7 @@ export class AgentRegistry implements IAgentRegistry {
           multiedit: 'deny',
         })
       ),
+      options: {},
     });
 
     this.register({
@@ -168,6 +189,7 @@ export class AgentRegistry implements IAgentRegistry {
           todowrite: 'deny',
         })
       ),
+      options: {},
     });
 
     this.register({
@@ -190,6 +212,7 @@ export class AgentRegistry implements IAgentRegistry {
           websearch: 'allow',
         })
       ),
+      options: {},
     });
   }
 
@@ -197,6 +220,11 @@ export class AgentRegistry implements IAgentRegistry {
    * 创建默认的build Agent
    */
   private createDefaultBuildAgent(): AgentConfig {
+    const defaults = fromConfig({
+      '*': 'allow',
+      doom_loop: 'ask',
+    });
+
     return {
       type: 'build',
       name: 'build',
@@ -205,15 +233,13 @@ export class AgentRegistry implements IAgentRegistry {
       enabled: true,
       native: true,
       permission: merge(
-        fromConfig({
-          '*': 'allow',
-          doom_loop: 'ask',
-        }),
+        defaults,
         fromConfig({
           question: 'allow',
           plan_enter: 'allow',
         })
       ),
+      options: {},
     };
   }
 }
@@ -225,10 +251,20 @@ let globalRegistry: AgentRegistry | null = null;
 
 /**
  * 获取全局Agent注册表
+ * @param defaultAgentName 默认Agent名称（可选）
  */
-export function getAgentRegistry(): AgentRegistry {
+export function getAgentRegistry(defaultAgentName?: string): AgentRegistry {
   if (!globalRegistry) {
-    globalRegistry = new AgentRegistry();
+    globalRegistry = new AgentRegistry(defaultAgentName);
+  } else if (defaultAgentName !== undefined) {
+    globalRegistry.setDefaultAgentName(defaultAgentName);
   }
   return globalRegistry;
+}
+
+/**
+ * 重置全局Agent注册表（主要用于测试）
+ */
+export function resetAgentRegistry(): void {
+  globalRegistry = null;
 }

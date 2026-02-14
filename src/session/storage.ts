@@ -5,12 +5,14 @@
 
 import * as vscode from 'vscode';
 import { createLogger } from '../utils/logger';
-import { MessageWithParts, Part, UserMessage, AssistantMessage, MessageRole, MessageError, TextPart, FilePart } from './message';
-
-/**
- * 基础消息接口（联合类型）
- */
-export type MessageInfo = UserMessage | AssistantMessage;
+import {
+  MessageWithParts,
+  Part,
+  UserMessage,
+  AssistantMessage,
+  MessageInfo,
+  MessageError,
+} from './message-v2';
 
 const logger = createLogger('session.storage');
 
@@ -121,7 +123,13 @@ export interface ISessionStorage {
    * @param messageID 消息ID
    * @param error 错误信息
    */
-  setAssistantMessageError(messageID: string, error: MessageError): Promise<void>;
+  setAssistantMessageError(messageID: string, error: {
+    name: string;
+    message: string;
+    statusCode?: number;
+    isRetryable?: boolean;
+    providerID?: string;
+  }): Promise<void>;
 
   /**
    * 完成助手消息
@@ -215,7 +223,7 @@ export class VSCodeSessionStorage implements ISessionStorage {
     const parts = await this.getParts(messageID);
     
     return {
-      ...message,
+      info: message,
       parts,
     };
   }
@@ -238,7 +246,7 @@ export class VSCodeSessionStorage implements ISessionStorage {
     for (const message of sortedMessages) {
       const parts = await this.getParts(message.id);
       yield {
-        ...message,
+        info: message,
         parts,
       };
     }
@@ -367,7 +375,7 @@ export class VSCodeSessionStorage implements ISessionStorage {
     const parts = await this.getParts(latestMessage.id);
     
     return {
-      ...latestMessage,
+      info: latestMessage,
       parts,
     };
   }
@@ -393,7 +401,7 @@ export class VSCodeSessionStorage implements ISessionStorage {
     const message: AssistantMessage = {
       id: messageID,
       sessionID: options.sessionID,
-      role: MessageRole.Assistant,
+      role: 'assistant',
       time: {
         created: now,
       },
@@ -434,7 +442,7 @@ export class VSCodeSessionStorage implements ISessionStorage {
     const message: UserMessage = {
       id: options.messageID,
       sessionID: options.sessionID,
-      role: MessageRole.User,
+      role: 'user',
       time: options.time,
       agent: options.agent,
       model: options.model,
@@ -488,7 +496,13 @@ export class VSCodeSessionStorage implements ISessionStorage {
   /**
    * 设置助手消息错误
    */
-  async setAssistantMessageError(messageID: string, error: MessageError): Promise<void> {
+  async setAssistantMessageError(messageID: string, error: {
+    name: string;
+    message: string;
+    statusCode?: number;
+    isRetryable?: boolean;
+    providerID?: string;
+  }): Promise<void> {
     // 从所有会话中查找消息（因为不知道 sessionID）
     const messages = await this.loadMessages();
     let message: MessageInfo | null = null;
@@ -503,19 +517,37 @@ export class VSCodeSessionStorage implements ISessionStorage {
       }
     }
     
-    if (!message || !sessionID || message.role !== MessageRole.Assistant) {
+    if (!message || !sessionID || message.role !== 'assistant') {
       throw new Error(`消息 ${messageID} 不存在或不是助手消息`);
     }
     
+    // Convert error to MessageError format
+    const messageError: MessageError = error.name === 'APIError'
+      ? {
+          name: 'APIError',
+          message: error.message,
+          statusCode: error.statusCode,
+          isRetryable: error.isRetryable ?? false,
+        }
+      : error.name === 'ProviderAuthError'
+      ? {
+          name: 'ProviderAuthError',
+          providerID: error.providerID || '',
+          message: error.message,
+        }
+      : error.name === 'MessageAbortedError'
+      ? {
+          name: 'MessageAbortedError',
+          message: error.message,
+        }
+      : {
+          name: 'Unknown',
+          message: error.message,
+        };
+    
     const updated: AssistantMessage = {
       ...message,
-      error: {
-        name: error.name,
-        message: error.message,
-        ...(error.statusCode !== undefined && { statusCode: error.statusCode }),
-        ...(error.isRetryable !== undefined && { isRetryable: error.isRetryable }),
-        ...(error.providerID && { providerID: error.providerID }),
-      },
+      error: messageError,
     };
     
     await this.saveMessage(sessionID, messageID, updated);
@@ -555,20 +587,52 @@ export class VSCodeSessionStorage implements ISessionStorage {
       }
     }
     
-    if (!message || !sessionID || message.role !== MessageRole.Assistant) {
-      throw new Error(`消息 ${messageID} 不存在或不是助手消息`);
+    if (!message || !sessionID) {
+      // 记录详细信息以便调试
+      const allMessageIDs: string[] = [];
+      for (const [sid, sessionMessages] of messages.entries()) {
+        for (const msgID of sessionMessages.keys()) {
+          allMessageIDs.push(`${sid}:${msgID}`);
+        }
+      }
+      logger.error('消息不存在，无法完成', {
+        messageID,
+        totalSessions: messages.size,
+        totalMessages: allMessageIDs.length,
+        sampleMessageIDs: allMessageIDs.slice(0, 10),
+      });
+      throw new Error(`消息 ${messageID} 不存在`);
     }
     
+    // 检查 role 字段（可能是字符串 'assistant' 或 MessageRole.Assistant）
+    const msgRole = (message as any).role;
+    if (msgRole !== 'assistant' && msgRole !== 'assistant') {
+      // 记录详细信息以便调试
+      logger.warn('消息 role 不匹配', { 
+        messageID, 
+        expectedRole: 'assistant', 
+        actualRole: msgRole,
+        messageKeys: Object.keys(message)
+      });
+      throw new Error(`消息 ${messageID} 不是助手消息（role: ${msgRole}）`);
+    }
+    
+    // 确保消息是 AssistantMessage 类型
+    if (msgRole !== 'assistant') {
+      throw new Error(`消息 ${messageID} 不是助手消息（role: ${msgRole}）`);
+    }
+    
+    const assistantMsg = message as AssistantMessage;
     const updated: AssistantMessage = {
-      ...message,
+      ...assistantMsg,
       time: {
-        ...message.time,
+        ...assistantMsg.time,
         completed: Date.now(),
       },
-      cost: options.cost ?? message.cost,
-      tokens: options.tokens ?? message.tokens,
-      finish: options.finish ?? (message as AssistantMessage).finish,
-      summary: options.summary ?? (message as AssistantMessage).summary,
+      cost: options.cost ?? assistantMsg.cost,
+      tokens: options.tokens ?? assistantMsg.tokens,
+      finish: options.finish ?? assistantMsg.finish,
+      summary: options.summary ?? assistantMsg.summary,
     };
     
     await this.saveMessage(sessionID, messageID, updated);

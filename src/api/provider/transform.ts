@@ -19,11 +19,13 @@ export namespace ProviderTransform {
     // 1. 过滤不支持的内容类型
     msgs = unsupportedParts(msgs as any, model) as any;
 
-    // 2. 对于 zhipuai/openai-compatible，合并多个 system 消息为一个，并确保 content 是字符串
+// 2. 对于 zhipuai/openai-compatible，合并多个 system 消息为一个，并确保 content 是字符串
     // 参考 opencode：某些模型不支持多个 system 消息，需要合并
     // 关键问题：zhipuai/openai-compatible API 要求 system 消息的 content 必须是字符串，不能是数组
     // 即使只有一个 system 消息，如果它的 content 是数组，也需要转换为字符串
     if (model.providerID === 'zhipuai' || model.api.npm === '@ai-sdk/openai-compatible') {
+      console.log(`[HICODE DEBUG] 对智谱AI消息进行特殊处理 - 原始消息数量: ${msgs.length}`);
+      
       const systemMsgs: ModelMessage[] = [];
       const otherMsgs: ModelMessage[] = [];
       
@@ -35,6 +37,8 @@ export namespace ProviderTransform {
           otherMsgs.push(msg);
         }
       }
+      
+      console.log(`[HICODE DEBUG] 智谱AI消息分离 - 系统消息: ${systemMsgs.length}, 其他消息: ${otherMsgs.length}`);
       
       // 处理 system 消息：合并多个为一个，并确保 content 是字符串
       // 注意：即使只有一个 system 消息，也要确保它的 content 是字符串
@@ -63,6 +67,9 @@ export namespace ProviderTransform {
         // 合并所有 system 内容为一个字符串
         const mergedSystemContent = systemContents.join('\n\n');
         
+        console.log(`[HICODE DEBUG] 智谱AI合并系统消息 - 原始系统消息数: ${systemContents.length}, 合并后长度: ${mergedSystemContent.length}`);
+        console.log(`[HICODE DEBUG] 智谱AI系统消息前200字符:`, mergedSystemContent.substring(0, 200));
+        
         if (mergedSystemContent.trim() !== '') {
           // 创建一个合并后的 system 消息，确保 content 是字符串
           msgs = [
@@ -72,9 +79,11 @@ export namespace ProviderTransform {
             } as ModelMessage,
             ...otherMsgs,
           ];
+          console.log(`[HICODE DEBUG] 智谱AI消息转换完成 - 总消息数: ${msgs.length}`);
         } else {
           // 如果所有 system 消息都为空，移除它们
           msgs = otherMsgs;
+          console.log(`[HICODE DEBUG] 智谱AI所有系统消息为空，已移除`);
         }
       }
     }
@@ -85,7 +94,7 @@ export namespace ProviderTransform {
     return msgs as ModelMessage[];
   }
 
-  /**
+/**
    * 获取默认温度参数
    */
   export function temperature(model: ModelConfig): number | undefined {
@@ -94,6 +103,17 @@ export namespace ProviderTransform {
     if (id.includes('glm-4.6')) return 1.0;
     if (id.includes('glm-4.7')) return 1.0;
     return undefined;
+  }
+  
+  /**
+   * 检查模型是否需要特殊的工具调用设置
+   */
+  export function needsSpecialToolHandling(model: ModelConfig): boolean {
+    const id = model.modelID.toLowerCase();
+    const provider = model.providerID.toLowerCase();
+    
+    // 智谱AI模型可能需要特殊处理
+    return provider.includes('zhipuai') || id.includes('glm');
   }
 
   /**
@@ -340,6 +360,45 @@ export namespace ProviderTransform {
             }
             // 未知格式（null, undefined 等），跳过
             return undefined;
+          }
+          // tool 消息：确保 content 是 ToolContent 格式（数组，包含 tool-result 或 tool-approval-response）
+          if (msg.role === 'tool') {
+            if (!Array.isArray(msg.content)) {
+              // tool 消息的 content 必须是数组
+              return undefined;
+            }
+            
+            // 验证并转换 tool 消息的内容
+            const filtered = (msg.content as any[]).filter((part: any) => {
+              // tool-result 部分：验证完整结构
+              if (part.type === 'tool-result') {
+                // 确保有必需的字段
+                if (!part.toolCallId || !part.toolName || !part.output) {
+                  return false;
+                }
+                // 验证 output 结构
+                if (part.output.type === 'text') {
+                  return typeof part.output.value === 'string' && part.output.value !== '';
+                }
+                if (part.output.type === 'json') {
+                  return part.output.value !== undefined && part.output.value !== null;
+                }
+                // 其他 output 类型（error-text, error-json, execution-denied, content）
+                return true;
+              }
+              
+              // tool-approval-response 部分
+              if (part.type === 'tool-approval-response') {
+                return part.approvalId !== undefined && typeof part.approved === 'boolean';
+              }
+              
+              // 如果类型不是 tool-result 或 tool-approval-response，过滤掉
+              // 这包括错误的格式，如 { type: 'text', text: ... }
+              return false;
+            });
+            
+            if (filtered.length === 0) return undefined;
+            return { ...msg, content: filtered } as ModelMessage;
           }
           
           // user/assistant 消息：处理字符串或数组内容

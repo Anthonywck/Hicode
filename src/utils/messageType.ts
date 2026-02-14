@@ -153,3 +153,11 @@ export const HICODE_INSERT_CODE_F2B_REQ = 'hicode_insert_code_f2b_req';
 
 /** 后端通知：工具调用状态更新（插件端到前端） */
 export const HICODE_TOOL_CALL_UPDATE_B2F = 'hicode_tool_call_update_b2f';
+
+// ========== 权限相关消息 ==========
+
+/** 后端通知：权限请求（插件端到前端） */
+export const HICODE_PERMISSION_REQUEST_B2F = 'hicode_permission_request_b2f';
+
+/** 前端请求：权限响应（前端到插件端） */
+export const HICODE_PERMISSION_RESPONSE_F2B_REQ = 'hicode_permission_response_f2b_req';

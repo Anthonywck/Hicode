@@ -136,11 +136,13 @@ export class APIClientManager implements IAPIClient {
     }
   }
 
-  /**
+/**
    * 发送聊天请求
    */
   async sendChatRequest(request: ChatRequest): Promise<ChatResponse> {
     try {
+      console.log(`[HICODE DEBUG] 开始发送聊天请求`);
+      
       // 如果没有指定模型，使用当前模型
       let modelId = request.model;
       if (!modelId) {
@@ -150,6 +152,8 @@ export class APIClientManager implements IAPIClient {
         }
       }
       
+      console.log(`[HICODE DEBUG] 使用模型: ${modelId}`);
+      
       // 解析模型ID
       const [providerID, modelID] = this.parseModelId(modelId);
 
@@ -157,11 +161,14 @@ export class APIClientManager implements IAPIClient {
       const model = await this.modelManager.getModel(providerID, modelID);
       const provider = await this.modelManager.getProvider(providerID);
 
+      console.log(`[HICODE DEBUG] 模型配置 - Provider: ${providerID}, Model: ${modelID}`);
+
       // 获取语言模型实例
       const languageModel = await this.providerManager.getLanguageModel(model, provider);
 
       // 转换消息格式
       const messages = this.convertMessages(request.messages);
+      console.log(`[HICODE DEBUG] 转换后的消息数量: ${messages.length}`);
 
       // 应用消息转换
       const transformedMessages = ProviderTransform.message(
@@ -180,6 +187,8 @@ export class APIClientManager implements IAPIClient {
       // 动态导入 AI SDK
       const { generateText } = await import('ai');
       
+      console.log(`[HICODE DEBUG] 开始调用AI SDK - generateText`);
+      
       // 调用 AI SDK
       const result = await generateText({
         model: languageModel,
@@ -189,6 +198,9 @@ export class APIClientManager implements IAPIClient {
         ...providerOptions,
       } as any); // 使用 any 类型以兼容不同版本的 AI SDK
 
+      console.log(`[HICODE DEBUG] AI SDK调用完成 - 响应长度: ${result.text?.length || 0}, 完成原因: ${result.finishReason}`);
+      console.log(`[HICODE DEBUG] 响应内容预览:`, result.text?.substring(0, 200) || '');
+      
       return {
         content: result.text,
         finishReason: this.mapFinishReason(result.finishReason),
@@ -199,13 +211,14 @@ export class APIClientManager implements IAPIClient {
         },
       };
     } catch (error) {
+      console.error(`[HICODE DEBUG] 发送聊天请求失败:`, error);
       throw new Error(
         `Failed to send chat request: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
-  /**
+/**
    * 发送流式聊天请求
    */
   async sendStreamChatRequest(
@@ -215,6 +228,8 @@ export class APIClientManager implements IAPIClient {
     onError: (error: Error) => void
   ): Promise<void> {
     try {
+      console.log(`[HICODE DEBUG] 开始发送流式聊天请求`);
+      
       // 如果没有指定模型，使用当前模型
       let modelId = request.model;
       if (!modelId) {
@@ -231,6 +246,8 @@ export class APIClientManager implements IAPIClient {
       // 获取模型和提供商配置
       const model = await this.modelManager.getModel(providerID, modelID);
       const provider = await this.modelManager.getProvider(providerID);
+
+      console.log(`[HICODE DEBUG] 流式请求模型配置 - Provider: ${providerID}, Model: ${modelID}`);
 
       // 获取语言模型实例
       const languageModel = await this.providerManager.getLanguageModel(model, provider);
@@ -277,18 +294,20 @@ export class APIClientManager implements IAPIClient {
       
       // 不删除 tools，保持空对象（opencode 的做法）
       
-      try {
+try {
         // 添加 onError 回调来处理流错误，参考 opencode 的实现
         streamOptions.onError = (error: any) => {
           console.error('[APIClient] Stream error in onError callback:', error);
           // 不在这里抛出错误，让 fullStream 处理
         };
         
+        console.log(`[HICODE DEBUG] 开始调用AI SDK - streamText`);
         const result = await streamText(streamOptions);
 
         // 使用 fullStream 处理所有 chunk 类型，参考 opencode 的实现
         // 使用 any 类型以处理所有可能的 chunk 类型
         let currentText = '';
+        console.log(`[HICODE DEBUG] 开始处理流式响应`);
         try {
           for await (const chunk of result.fullStream) {
           const chunkType = (chunk as any).type;
@@ -297,6 +316,7 @@ export class APIClientManager implements IAPIClient {
             case 'start':
             case 'stream-start':
               // 流开始，不做处理
+              console.log(`[HICODE DEBUG] 收到流开始事件 - 类型: ${chunkType}`);
               break;
             
             case 'text-start':
@@ -304,16 +324,16 @@ export class APIClientManager implements IAPIClient {
               currentText = '';
               break;
             
-            case 'text-delta':
+case 'text-delta':
               // 文本增量，累积并发送
               // AI SDK 6.0 使用 text 属性而不是 textDelta
               const textDelta = (chunk as any).text || (chunk as any).textDelta;
               if (textDelta) {
                 currentText += textDelta;
-                console.log('[APIClient] Sending text-delta chunk:', { length: textDelta.length, preview: textDelta.substring(0, 50) });
+                console.log('[HICODE DEBUG] 发送文本增量:', { length: textDelta.length, preview: textDelta.substring(0, 50) });
                 onChunk(textDelta);
               } else {
-                console.warn('[APIClient] text-delta chunk has no text or textDelta property', { chunk });
+                console.warn('[HICODE DEBUG] text-delta chunk没有text或textDelta属性', { chunk });
               }
               break;
             
@@ -321,14 +341,16 @@ export class APIClientManager implements IAPIClient {
               // 文本结束，不做处理（已经在 text-delta 中发送）
               break;
             
-            case 'finish':
+case 'finish':
             case 'finish-step':
             case 'step-finish':
               // 流结束
+              console.log(`[HICODE DEBUG] 收到流结束事件 - 类型: ${chunkType}`);
               break;
             
             case 'error':
               // 错误，抛出
+              console.error(`[HICODE DEBUG] 收到错误事件:`, (chunk as any).error);
               throw (chunk as any).error;
             
             // 忽略其他类型的 chunk（如 tool-call, tool-result, reasoning-* 等）
@@ -347,33 +369,37 @@ export class APIClientManager implements IAPIClient {
               // 这些类型我们不处理，但也不抛出错误
               break;
             
-            default:
+default:
               // 对于未知的 chunk 类型，记录日志但不抛出错误（参考 opencode 的实现）
-              console.log('[APIClient] Unhandled chunk type:', chunkType);
+              console.log(`[HICODE DEBUG] 未处理的chunk类型: ${chunkType}`, chunk);
               break;
           }
         }
-        } catch (streamError: any) {
+} catch (streamError: any) {
           // 如果 fullStream 失败（可能是 stream-start 错误），尝试使用 textStream
           if (streamError.message?.includes('stream-start') || streamError.message?.includes('Unhandled chunk type')) {
-            console.warn('[APIClient] fullStream failed with stream-start error, trying textStream');
+            console.warn(`[HICODE DEBUG] fullStream失败，尝试textStream: ${streamError.message}`);
             try {
               // 尝试使用 textStream 作为回退
+              console.log(`[HICODE DEBUG] 开始使用textStream`);
               for await (const chunk of result.textStream) {
                 onChunk(chunk);
               }
             } catch (textStreamError: any) {
               // 如果 textStream 也失败，抛出错误
+              console.error(`[HICODE DEBUG] textStream也失败:`, textStreamError);
               throw textStreamError;
             }
           } else {
+            console.error(`[HICODE DEBUG] 流处理失败:`, streamError);
             throw streamError;
           }
         }
         
+        console.log(`[HICODE DEBUG] 流式响应处理完成`);
         onEnd();
       } catch (error) {
-        console.error('[APIClient] Stream processing failed:', error);
+        console.error(`[HICODE DEBUG] 流处理失败:`, error);
         onError(error instanceof Error ? error : new Error(String(error)));
       }
     } catch (error) {
@@ -442,6 +468,13 @@ export class APIClientManager implements IAPIClient {
    */
   getCurrentModel(): string {
     return this.modelManager.getCurrentModel();
+  }
+
+  /**
+   * 设置当前模型ID
+   */
+  async setCurrentModel(modelId: string): Promise<void> {
+    await this.modelManager.setCurrentModel(modelId);
   }
 
   /**

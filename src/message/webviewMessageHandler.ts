@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Webview 消息处理器
  * 
  * 处理来自 Webview 的各种消息请求，包括：
@@ -116,7 +116,8 @@ export async function handleAskQuestion(
     let currentSession: Session | null = null;
     let lastMessageId: string | null = null;
 
-    // 发送流式响应
+// 发送流式响应
+    console.log(`[HICODE DEBUG] WebviewMessageHandler开始发送流式响应 - chatId: ${chatId}, sessionId: ${sessionId}`);
     await messageHandler.handleSendStreamMessage(
       content.trim(),
       {
@@ -129,15 +130,14 @@ export async function handleAskQuestion(
           }
           accumulatedContent += textChunk;
           
-          // 调试日志（仅在开发模式下）
-          if (process.env.NODE_ENV === 'development') {
-            logger.debug('发送流式数据块到前端', { 
-              chunkLength: textChunk.length, 
-              accumulatedLength: accumulatedContent.length,
-              chatId: chatId || sessionId,
-              preview: textChunk.substring(0, 50)
-            }, 'WebviewMessageHandler');
-          }
+          // 调试日志（不仅在开发模式下）
+          console.log(`[HICODE DEBUG] 发送流式数据块到前端 - 长度: ${textChunk.length}, 累积长度: ${accumulatedContent.length}, chatId: ${chatId || sessionId}`);
+          logger.debug('发送流式数据块到前端', { 
+            chunkLength: textChunk.length, 
+            accumulatedLength: accumulatedContent.length,
+            chatId: chatId || sessionId,
+            preview: textChunk.substring(0, 50)
+          }, 'WebviewMessageHandler');
           
           // 立即发送流式数据到前端，实现真正的流式效果
           // 前端期望的格式：{ chatId, text }
@@ -152,6 +152,8 @@ export async function handleAskQuestion(
         },
         // 流结束时的回调
         onEnd: async () => {
+          console.log(`[HICODE DEBUG] 流式响应结束 - 总长度: ${accumulatedContent.length}`);
+          
           // 发送工具调用状态更新（如果有）
           if (currentSession && lastMessageId) {
             await sendToolCallUpdates(webview, currentSession, lastMessageId, chatId || sessionId, token);
@@ -171,6 +173,7 @@ export async function handleAskQuestion(
         },
         // 发生错误时的回调
         onError: (error: Error) => {
+          console.error(`[HICODE DEBUG] 处理聊天消息时发生错误:`, error);
           logger.error('处理聊天消息时发生错误：', error, 'WebviewMessageHandler');
           webview.postMessage({
             token: token || generateUUID(),
@@ -2243,3 +2246,41 @@ export async function handleGetProviderModels(
   }
 }
 
+/**
+ * 处理权限响应请求
+ * @param message 消息对象
+ * @param webview Webview 实例
+ */
+export async function handlePermissionResponse(
+  message: any,
+  webview: vscode.Webview
+): Promise<void> {
+  logger.debug('收到权限响应请求', { message }, 'WebviewMessageHandler');
+
+  try {
+    const { requestID, response, message: feedbackMessage } = message.data || {};
+
+    if (!requestID || !response) {
+      throw new Error('缺少必要的参数：requestID 或 response');
+    }
+
+    // 获取权限管理器
+    const { getPermissionManager } = await import('../permission/permission');
+    const context = await getExtensionContext();
+    const permissionManager = getPermissionManager(context);
+
+    // 处理权限响应
+    await permissionManager.respond(requestID, response, feedbackMessage);
+
+    logger.debug('权限响应处理成功', { requestID, response }, 'WebviewMessageHandler');
+  } catch (error) {
+    logger.error('处理权限响应失败', error, 'WebviewMessageHandler');
+    webview.postMessage({
+      token: message.token || generateUUID(),
+      message: MessageType.HICODE_ERROR_B2F,
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
